@@ -286,12 +286,12 @@ return function(t)
     t.equal("a\n  b\nc", ui._trim_question("  a\n  b\nc  "))
   end)
 
-  t.test("ensure_highlights links the plugin groups to the standard float groups", function()
+  t.test("ensure_highlights links the plugin groups to the documented groups", function()
     ui.ensure_highlights()
 
     local expected = {
-      OpencodeAskNormal = "NormalFloat",
-      OpencodeAskBorder = "FloatBorder",
+      OpencodeAskNormal = "Normal",
+      OpencodeAskBorder = "Normal",
       OpencodeAskTitle = "FloatTitle",
       OpencodeAskSelection = "Visual",
     }
@@ -310,8 +310,8 @@ return function(t)
     t.equal(nil, hl.link, "the custom group should not be re-linked")
 
     -- Restore the default link so later tests see the module's standard state.
-    vim.api.nvim_set_hl(0, "OpencodeAskBorder", { link = "FloatBorder" })
-    t.equal("FloatBorder", vim.api.nvim_get_hl(0, { name = "OpencodeAskBorder" }).link)
+    vim.api.nvim_set_hl(0, "OpencodeAskBorder", { link = "Normal" })
+    t.equal("Normal", vim.api.nvim_get_hl(0, { name = "OpencodeAskBorder" }).link)
   end)
 
   t.test("prompt applies plugin styling and omits the title without a border", function()

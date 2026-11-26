@@ -94,14 +94,22 @@ This configuration does not set a leader, so the default mapping is `\oq`.
 
 The floating prompt uses four plugin-scoped highlight groups. They are defined
 with default links, so your own definitions win and colorschemes can still
-override them.
+override them. The prompt and border follow the editor background by default,
+so they blend in with transparent colorschemes.
 
 | Group | Default link | Used for |
 | --- | --- | --- |
-| `OpencodeAskNormal` | `NormalFloat` | Prompt text and background. |
-| `OpencodeAskBorder` | `FloatBorder` | Float border. |
+| `OpencodeAskNormal` | `Normal` | Prompt text and background (matches the editor). |
+| `OpencodeAskBorder` | `Normal` | Border glyphs with a transparent background. |
 | `OpencodeAskTitle` | `FloatTitle` | Float title (the selection reference). |
 | `OpencodeAskSelection` | `Visual` | Selected lines in the source buffer while the prompt is open. |
+
+To restore float-specific colors instead, link the groups back:
+
+```lua
+vim.api.nvim_set_hl(0, "OpencodeAskNormal", { link = "NormalFloat" })
+vim.api.nvim_set_hl(0, "OpencodeAskBorder", { link = "FloatBorder" })
+```
 
 For example, to give the prompt a red border:
 

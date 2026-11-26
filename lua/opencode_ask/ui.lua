@@ -8,9 +8,12 @@ local DEFAULT_HEIGHT = 4
 local MIN_WIDTH = 20
 local DEFAULT_BORDER = "rounded"
 
+-- The prompt follows the editor background by default so it blends in with
+-- transparent colorschemes. Users can link these groups back to NormalFloat /
+-- FloatBorder (or define their own colors) for float-specific styling.
 local HIGHLIGHT_LINKS = {
-  { "OpencodeAskNormal", "NormalFloat" },
-  { "OpencodeAskBorder", "FloatBorder" },
+  { "OpencodeAskNormal", "Normal" },
+  { "OpencodeAskBorder", "Normal" },
   { "OpencodeAskTitle", "FloatTitle" },
   { "OpencodeAskSelection", "Visual" },
 }
