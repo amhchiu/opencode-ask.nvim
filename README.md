@@ -49,6 +49,15 @@ return {
     keymap = "<leader>oa",
     save = false,
 
+    -- Floating prompt sizing and placement.
+    ui = {
+      width = 80,
+      height = 4,
+      border = "rounded", -- "none" omits the title and border cells.
+      position = "selection", -- "selection" or "center".
+      winblend = 0,
+    },
+
     -- Any other value falls back to vim.ui.select.
     picker = "fzf-lua",
 
@@ -75,9 +84,33 @@ default `api.timeout`.
 | `state_path` | `string` | `vim.fn.stdpath("state") .. "/opencode-ask/sessions.json"` | JSON file that remembers one session per project. |
 | `api.command` | `string` | `"opencode"` | OpenCode executable name or absolute path. Must support `opencode api` and `opencode session list`. |
 | `api.timeout` | `number` | `15000` | Timeout in milliseconds for OpenCode CLI calls. Health checks cap their own timeout at 5000ms. |
+| `ui.width` | `number` | `80` | Width of the floating prompt in columns. The prompt is at least 20 columns wide when the editor is wide enough, and never wider than the editor. |
+| `ui.height` | `number` | `4` | Height of the floating prompt in lines. |
+| `ui.border` | `string` or border list | `"rounded"` | Any `nvim_open_win` border name (`"none"`, `"single"`, `"double"`, `"rounded"`, `"solid"`, `"shadow"`) or a list of 1, 2, 4, or 8 border strings. `"none"` omits the float title and border cells. |
+| `ui.position` | `string` | `"selection"` | `"selection"` opens the prompt above the selected lines when there is room, below them when there is not, and centered when neither fits. `"center"` always centers the prompt. |
+| `ui.winblend` | `number` | `0` | Transparency of the floating prompt, from 0 (opaque) to 100 (fully transparent). |
 
 `<leader>` resolves to Neovim's default `\` until `vim.g.mapleader` is set.
 This configuration does not set a leader, so the default mapping is `\oq`.
+
+### Theming
+
+The floating prompt uses four plugin-scoped highlight groups. They are defined
+with default links, so your own definitions win and colorschemes can still
+override them.
+
+| Group | Default link | Used for |
+| --- | --- | --- |
+| `OpencodeAskNormal` | `NormalFloat` | Prompt text and background. |
+| `OpencodeAskBorder` | `FloatBorder` | Float border. |
+| `OpencodeAskTitle` | `FloatTitle` | Float title (the selection reference). |
+| `OpencodeAskSelection` | `Visual` | Selected lines in the source buffer while the prompt is open. |
+
+For example, to give the prompt a red border:
+
+```lua
+vim.api.nvim_set_hl(0, "OpencodeAskBorder", { fg = "#ff0000" })
+```
 
 ## Commands and keymaps
 
@@ -120,7 +153,9 @@ Cancelling the picker quietly does nothing.
 
 1. Open a normal, named file buffer.
 2. Select lines in visual mode.
-3. Press `<leader>oq` (or run `:'<,'>OpencodeAsk`).
+3. Press `<leader>oq` (or run `:'<,'>OpencodeAsk`). The selected lines stay
+   highlighted, and the prompt opens directly above the selection when there is
+   room, below it otherwise, and centered when neither fits.
 4. Type the question. `<C-j>` adds a newline; `<CR>` submits; `<Esc>` cancels.
 5. The plugin saves the buffer when `save` is enabled, sends the question, and
    notifies `Sent to <session> (<file>:<range>)`.
