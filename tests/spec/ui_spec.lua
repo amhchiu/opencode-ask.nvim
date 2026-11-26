@@ -70,4 +70,64 @@ return function(t)
     t.equal(16, vim.fn.strchars(layout.title))
     t.equal(string.rep("語", 16), layout.title)
   end)
+
+  t.test("trim_question rejects empty and whitespace-only input", function()
+    t.equal("", ui._trim_question(""))
+    t.equal("", ui._trim_question("   "))
+    t.equal("", ui._trim_question("\t\n \r\n"))
+    t.equal("", ui._trim_question(nil))
+    t.equal("", ui._trim_question(42))
+  end)
+
+  t.test("trim_question trims leading and trailing whitespace", function()
+    t.equal("hello", ui._trim_question("  hello  "))
+    t.equal("hello", ui._trim_question("\nhello\t"))
+    t.equal("hello", ui._trim_question("  \n\thello \t\n "))
+  end)
+
+  t.test("trim_question keeps internal newlines and whitespace", function()
+    t.equal("hello\nworld", ui._trim_question(" hello\nworld "))
+    t.equal("first\n\nsecond", ui._trim_question("\nfirst\n\nsecond\n"))
+    t.equal("a\n  b\nc", ui._trim_question("  a\n  b\nc  "))
+  end)
+
+  t.test("prompt cleans up when setup fails after opening", function()
+    local function float_count()
+      local count = 0
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_config(win).relative ~= "" then
+          count = count + 1
+        end
+      end
+      return count
+    end
+
+    local function scratch_count()
+      local count = 0
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.bo[buf].buftype == "nofile" then
+          count = count + 1
+        end
+      end
+      return count
+    end
+
+    local before_floats = float_count()
+    local before_scratch = scratch_count()
+    local original_cmd = vim.cmd
+    vim.cmd = function(command)
+      if command == "startinsert!" then
+        error("insert failed")
+      end
+      return original_cmd(command)
+    end
+
+    local ok, err = pcall(ui.prompt, {}, function() end)
+    vim.cmd = original_cmd
+
+    t.equal(false, ok, "prompt should report the setup failure")
+    t.matches("insert failed", tostring(err))
+    t.equal(before_floats, float_count(), "no floating window should remain")
+    t.equal(before_scratch, scratch_count(), "no scratch buffer should remain")
+  end)
 end

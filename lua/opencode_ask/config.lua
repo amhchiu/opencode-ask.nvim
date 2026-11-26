@@ -43,6 +43,12 @@ function M.merge(opts)
     error("opencode_ask: `session` must be a string (an OpenCode session ID) or nil", 2)
   end
 
+  if merged.keymap ~= nil and merged.keymap ~= false then
+    if type(merged.keymap) ~= "string" or vim.trim(merged.keymap) == "" then
+      error("opencode_ask: `keymap` must be a non-empty string, false, or nil", 2)
+    end
+  end
+
   return merged
 end
 

@@ -17,6 +17,18 @@ local function truncate_title(title, max_chars)
   return vim.fn.strcharpart(title, 0, max_chars)
 end
 
+--- Trim leading and trailing whitespace from the whole question while
+--- preserving newlines inside the text. Exported for tests.
+function M._trim_question(text)
+  if type(text) ~= "string" then
+    return ""
+  end
+
+  local trimmed = text:gsub("^%s+", "")
+  trimmed = trimmed:gsub("%s+$", "")
+  return trimmed
+end
+
 --- Compute the centered float geometry.
 ---
 --- This is an internal helper exported for tests. `dimensions` may override
@@ -76,39 +88,10 @@ function M.prompt(opts, on_submit)
   end
 
   local bufnr = vim.api.nvim_create_buf(false, true)
-  vim.bo[bufnr].buftype = "nofile"
-  vim.bo[bufnr].bufhidden = "wipe"
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = "markdown"
-  vim.b[bufnr].completion = false
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, initial_lines)
-
-  local open_ok, win = pcall(vim.api.nvim_open_win, bufnr, true, {
-    relative = "editor",
-    style = "minimal",
-    border = "rounded",
-    title = layout.title,
-    title_pos = "center",
-    width = layout.width,
-    height = layout.height,
-    row = layout.row,
-    col = layout.col,
-  })
-  if not open_ok then
-    if vim.api.nvim_buf_is_valid(bufnr) then
-      pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
-    end
-    error(win, 0)
-  end
-
-  vim.wo[win].wrap = true
-  vim.wo[win].linebreak = true
-
-  local line_count = vim.api.nvim_buf_line_count(bufnr)
-  vim.api.nvim_win_set_cursor(win, { line_count, 0 })
-  vim.cmd("startinsert!")
-
+  local win
   local closed = false
+  local submit
+  local cancel
 
   local function close()
     if closed then
@@ -118,7 +101,7 @@ function M.prompt(opts, on_submit)
 
     pcall(vim.cmd, "stopinsert")
 
-    if vim.api.nvim_win_is_valid(win) then
+    if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
     end
 
@@ -127,55 +110,89 @@ function M.prompt(opts, on_submit)
     end
   end
 
-  local function submit()
-    if closed then
-      return
+  local function setup()
+    vim.bo[bufnr].buftype = "nofile"
+    vim.bo[bufnr].bufhidden = "wipe"
+    vim.bo[bufnr].swapfile = false
+    vim.bo[bufnr].filetype = "markdown"
+    vim.b[bufnr].completion = false
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, initial_lines)
+
+    win = vim.api.nvim_open_win(bufnr, true, {
+      relative = "editor",
+      style = "minimal",
+      border = "rounded",
+      title = layout.title,
+      title_pos = "center",
+      width = layout.width,
+      height = layout.height,
+      row = layout.row,
+      col = layout.col,
+    })
+
+    vim.wo[win].wrap = true
+    vim.wo[win].linebreak = true
+
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    vim.api.nvim_win_set_cursor(win, { line_count, 0 })
+    vim.cmd("startinsert!")
+
+    submit = function()
+      if closed then
+        return
+      end
+
+      local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+      local text = M._trim_question(table.concat(lines, "\n"))
+      if text == "" then
+        vim.notify("opencode-ask: question cannot be empty", vim.log.levels.WARN)
+        return
+      end
+
+      close()
+      if on_submit then
+        on_submit(text)
+      end
     end
 
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    local text = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
-    if text == "" then
-      vim.notify("opencode-ask: question cannot be empty", vim.log.levels.WARN)
-      return
+    cancel = function()
+      close()
     end
 
-    close()
-    if on_submit then
-      on_submit(text)
-    end
+    vim.keymap.set({ "i", "n" }, "<CR>", submit, {
+      buffer = bufnr,
+      nowait = true,
+      silent = true,
+      desc = "Submit question",
+    })
+
+    vim.keymap.set("i", "<C-j>", function()
+      if closed then
+        return
+      end
+      -- Feed a literal <CR> without remapping so the <CR> submit mapping above
+      -- is not triggered recursively.
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "n", false)
+    end, {
+      buffer = bufnr,
+      nowait = true,
+      silent = true,
+      desc = "Insert a newline",
+    })
+
+    vim.keymap.set({ "i", "n" }, "<Esc>", cancel, {
+      buffer = bufnr,
+      nowait = true,
+      silent = true,
+      desc = "Cancel question",
+    })
   end
 
-  local function cancel()
+  local setup_ok, setup_err = pcall(setup)
+  if not setup_ok then
     close()
+    error(setup_err, 0)
   end
-
-  vim.keymap.set({ "i", "n" }, "<CR>", submit, {
-    buffer = bufnr,
-    nowait = true,
-    silent = true,
-    desc = "Submit question",
-  })
-
-  vim.keymap.set("i", "<C-j>", function()
-    if closed then
-      return
-    end
-    -- Feed a literal <CR> without remapping so the <CR> submit mapping above
-    -- is not triggered recursively.
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "n", false)
-  end, {
-    buffer = bufnr,
-    nowait = true,
-    silent = true,
-    desc = "Insert a newline",
-  })
-
-  vim.keymap.set({ "i", "n" }, "<Esc>", cancel, {
-    buffer = bufnr,
-    nowait = true,
-    silent = true,
-    desc = "Cancel question",
-  })
 end
 
 return M

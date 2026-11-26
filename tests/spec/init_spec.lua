@@ -77,6 +77,14 @@ local function delete_mapping(mode, key)
   pcall(vim.keymap.del, mode, key)
 end
 
+--- Clear the mapping installed by any earlier setup() call without leaving
+--- setup-specific options in place.
+local function reset_plugin_keymap()
+  with_options({}, function()
+    init.setup({ keymap = false, state_path = vim.fn.tempname() })
+  end)
+end
+
 return function(t)
   t.test("ask captures, prompts, saves, resolves, and sends", function()
     local context = make_context()
@@ -685,6 +693,129 @@ return function(t)
       pcall(vim.api.nvim_del_user_command, name)
     end
     vim.g.loaded_opencode_ask = saved_loaded
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("ask warns without throwing when the prompt cannot open", function()
+    local context = make_context()
+    local save_called = false
+    local resolve_called = false
+    local send_called = false
+    local notifications = {}
+
+    with_options({ save = false }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return context
+        end },
+        { ui, "prompt", function()
+          error("float exploded")
+        end },
+        { selection, "save", function()
+          save_called = true
+        end },
+        { sessions, "resolve", function()
+          resolve_called = true
+        end },
+        { client, "send", function()
+          send_called = true
+        end },
+        { vim, "notify", notification_stub(notifications) },
+      }, function()
+        local ok, err = pcall(init.ask, {})
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.equal(false, save_called, "save must not run when the prompt fails")
+    t.equal(false, resolve_called, "resolve must not run when the prompt fails")
+    t.equal(false, send_called, "send must not run when the prompt fails")
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("could not open the question prompt", notifications[1].message)
+    t.matches("float exploded", notifications[1].message)
+  end)
+
+  t.test("setup replaces the previous plugin keymap", function()
+    local first = "<leader>oz"
+    local second = "<leader>oy"
+    delete_mapping("x", first)
+    delete_mapping("x", second)
+    reset_plugin_keymap()
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        init.setup({ keymap = first, state_path = vim.fn.tempname() })
+        t.assert(vim.fn.maparg(first, "x") ~= "", "the first mapping should be installed")
+
+        init.setup({ keymap = second, state_path = vim.fn.tempname() })
+        t.equal("", vim.fn.maparg(first, "x"), "the previous plugin mapping should be removed")
+        t.assert(vim.fn.maparg(second, "x") ~= "", "the new mapping should be installed")
+      end)
+    end)
+
+    delete_mapping("x", first)
+    delete_mapping("x", second)
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("setup removes the previous plugin keymap when disabled", function()
+    local key = "<leader>oz"
+    delete_mapping("x", key)
+    reset_plugin_keymap()
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        init.setup({ keymap = key, state_path = vim.fn.tempname() })
+        t.assert(vim.fn.maparg(key, "x") ~= "", "the mapping should be installed")
+
+        local options = init.setup({ keymap = false, state_path = vim.fn.tempname() })
+        t.equal(false, options.keymap)
+        t.equal("", vim.fn.maparg(key, "x"), "disabling the keymap should remove the plugin mapping")
+      end)
+    end)
+
+    delete_mapping("x", key)
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("setup preserves user mappings it did not install", function()
+    local first = "<leader>oz"
+    local second = "<leader>oy"
+    local unrelated = "<leader>ox"
+    local user_callback = function() end
+    delete_mapping("x", first)
+    delete_mapping("x", second)
+    delete_mapping("x", unrelated)
+    reset_plugin_keymap()
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        init.setup({ keymap = first, state_path = vim.fn.tempname() })
+
+        -- The user replaces the plugin mapping and adds an unrelated mapping.
+        vim.keymap.set("x", first, user_callback, { desc = "user mapping" })
+        vim.keymap.set("x", unrelated, user_callback, { desc = "unrelated user mapping" })
+
+        init.setup({ keymap = second, state_path = vim.fn.tempname() })
+
+        local replaced = vim.fn.maparg(first, "x", false, true)
+        t.equal("table", type(replaced), "the user mapping should still exist")
+        t.equal(user_callback, replaced.callback, "the user mapping should not be deleted")
+        t.assert(vim.fn.maparg(unrelated, "x") ~= "", "unrelated user mappings should be preserved")
+        t.assert(vim.fn.maparg(second, "x") ~= "", "the new plugin mapping should be installed")
+      end)
+    end)
+
+    delete_mapping("x", first)
+    delete_mapping("x", second)
+    delete_mapping("x", unrelated)
     if not ok then
       error(err, 0)
     end

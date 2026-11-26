@@ -10,6 +10,9 @@ M.options = config.merge({})
 
 local PREFIX = "opencode-ask: "
 
+--- The keymap installed by the most recent setup() call, if any.
+local installed_keymap
+
 local function describe(err)
   if type(err) == "table" then
     local message = err.message
@@ -135,7 +138,7 @@ function M.ask(opts)
     return
   end
 
-  ui.prompt({ title = context.ref }, function(question)
+  local prompted, prompt_err = pcall(ui.prompt, { title = context.ref }, function(question)
     local saved, save_err = selection.save(context)
     if not saved then
       notify(save_err or "could not save the buffer", vim.log.levels.WARN)
@@ -164,6 +167,10 @@ function M.ask(opts)
       end)
     end)
   end)
+
+  if not prompted then
+    notify("could not open the question prompt: " .. describe(prompt_err), vim.log.levels.WARN)
+  end
 end
 
 --- Pick and store the OpenCode session for the current project.
@@ -196,14 +203,38 @@ function M.clear_session()
   notify(("Cleared the stored OpenCode session for %s"):format(root), vim.log.levels.INFO)
 end
 
+--- Remove the mapping installed by a previous setup() call.
+---
+--- Only delete the mapping when it is still the callback this plugin
+--- installed, so a mapping the user has since replaced is left alone.
+local function uninstall_keymap()
+  local installed = installed_keymap
+  installed_keymap = nil
+  if not installed then
+    return
+  end
+
+  local ok, mapping = pcall(vim.fn.maparg, installed.lhs, "x", false, true)
+  if ok and type(mapping) == "table" and mapping.callback == installed.callback then
+    pcall(vim.keymap.del, "x", installed.lhs)
+  end
+end
+
 --- Apply configuration and install the visual-mode keymap.
 function M.setup(opts)
-  M.options = config.merge(opts)
+  local merged = config.merge(opts)
+
+  uninstall_keymap()
+  M.options = merged
 
   if M.options.keymap then
-    vim.keymap.set("x", M.options.keymap, function()
+    local callback = function()
       M.ask()
-    end, { desc = "Ask OpenCode about the visual selection" })
+    end
+    vim.keymap.set("x", M.options.keymap, callback, {
+      desc = "Ask OpenCode about the visual selection",
+    })
+    installed_keymap = { lhs = M.options.keymap, callback = callback }
   end
 
   return M.options
