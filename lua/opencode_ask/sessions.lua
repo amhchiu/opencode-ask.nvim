@@ -330,7 +330,7 @@ function M.choose(cwd, callback)
       if ok and type(fzf) == "table" and type(fzf.fzf_exec) == "function" then
         local shown = pcall(fzf.fzf_exec, items, {
           prompt = "OpenCode sessions> ",
-          header = "Type a title; Enter creates when no match",
+          header = "Filter or create a session",
           fzf_opts = { ["--no-multi"] = true },
           actions = {
             ["enter"] = function(chosen, action_opts)

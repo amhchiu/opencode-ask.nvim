@@ -481,7 +481,7 @@ return function(t)
               )
               t.equal(true, captured.opts.fzf_opts["--no-multi"], "multi-select should be disabled")
               t.equal("OpenCode sessions> ", captured.opts.prompt, "the prompt should leave room for the query")
-              t.matches("Type a title", captured.opts.header, "the header should explain creation")
+              t.matches("Filter or create a session", captured.opts.header, "the header should explain filtering and creation")
               t.equal(0, calls, "the callback must wait for Enter")
 
               captured.opts.actions.enter({}, { last_query = "New session" })
