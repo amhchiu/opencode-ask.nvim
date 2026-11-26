@@ -251,14 +251,20 @@ function M.prompt(opts, on_submit)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, initial_lines)
 
     local highlight = opts.highlight
+    -- Resolve 0 before opening the float: afterwards the current buffer is the
+    -- prompt's scratch buffer, so cleanup would target the wrong buffer.
+    local highlight_bufnr = type(highlight) == "table" and highlight.bufnr or nil
+    if highlight_bufnr == 0 then
+      highlight_bufnr = vim.api.nvim_get_current_buf()
+    end
     if
       type(highlight) == "table"
       and type(highlight.first) == "number"
       and type(highlight.last) == "number"
-      and highlight.bufnr
-      and vim.api.nvim_buf_is_valid(highlight.bufnr)
+      and highlight_bufnr
+      and vim.api.nvim_buf_is_valid(highlight_bufnr)
     then
-      hl_bufnr = highlight.bufnr
+      hl_bufnr = highlight_bufnr
       pcall(function()
         local line_count = vim.api.nvim_buf_line_count(hl_bufnr)
         local first = math.max(1, math.min(highlight.first, line_count))

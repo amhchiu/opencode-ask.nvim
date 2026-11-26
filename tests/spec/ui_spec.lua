@@ -561,4 +561,36 @@ return function(t)
       end)
     end)
   end)
+
+  t.test("prompt resolves bufnr 0 for the selection highlight", function()
+    local original_buf = vim.api.nvim_get_current_buf()
+
+    with_source_buffer({ "one", "two", "three", "four", "five" }, function(buf)
+      with_prompt_cleanup(function()
+        vim.api.nvim_set_current_buf(buf)
+
+        local ok, err = pcall(ui.prompt, {
+          width = 20,
+          height = 2,
+          border = "none",
+          highlight = { bufnr = 0, first = 2, last = 4 },
+        }, nil)
+        t.equal(true, ok, tostring(err))
+
+        local win = find_float()
+        t.assert(win ~= nil, "prompt should open a floating window")
+        t.equal(1, #selection_marks(buf), "bufnr 0 should resolve to the source buffer")
+
+        local cancel = buffer_mapping_callback(vim.api.nvim_win_get_buf(win), "i", "<Esc>")
+        t.assert(type(cancel) == "function", "cancel mapping should have a callback")
+        cancel()
+
+        t.equal(0, #selection_marks(buf), "cancel should clear the resolved buffer's highlight")
+      end)
+    end)
+
+    if vim.api.nvim_buf_is_valid(original_buf) then
+      pcall(vim.api.nvim_set_current_buf, original_buf)
+    end
+  end)
 end
