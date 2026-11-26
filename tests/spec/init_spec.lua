@@ -903,4 +903,149 @@ return function(t)
       error(err, 0)
     end
   end)
+
+  t.test("ask forwards ui options, anchor, and highlight to the prompt", function()
+    local context = make_context()
+    local prompt_opts
+    local measured = {}
+
+    with_options({
+      save = false,
+      ui = {
+        width = 60,
+        height = 6,
+        border = "single",
+        position = "selection",
+        winblend = 12,
+      },
+    }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return context
+        end },
+        { ui, "_measure_anchor", function(win, first, last)
+          measured.win = win
+          measured.first = first
+          measured.last = last
+          return { top_row = 3, bottom_row = 5, win_col = 0, win_width = 80 }
+        end },
+        { ui, "prompt", function(opts)
+          prompt_opts = opts
+        end },
+        { vim, "notify", function() end },
+      }, function()
+        local ok, err = pcall(init.ask, { first = 2, last = 4 })
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.assert(prompt_opts ~= nil, "the prompt should be called")
+    t.equal(context.ref, prompt_opts.title)
+    t.equal(60, prompt_opts.width)
+    t.equal(6, prompt_opts.height)
+    t.equal("single", prompt_opts.border)
+    t.equal("selection", prompt_opts.position)
+    t.equal(12, prompt_opts.winblend)
+    t.equal({ top_row = 3, bottom_row = 5, win_col = 0, win_width = 80 }, prompt_opts.anchor)
+    t.equal({ bufnr = context.bufnr, first = 2, last = 4 }, prompt_opts.highlight)
+    t.equal(vim.api.nvim_get_current_win(), measured.win)
+    t.equal(2, measured.first)
+    t.equal(4, measured.last)
+  end)
+
+  t.test("ask skips anchor measurement with a centered prompt but keeps the highlight", function()
+    local context = make_context()
+    local prompt_opts
+    local measure_called = false
+
+    with_options({
+      save = false,
+      ui = {
+        width = 70,
+        height = 5,
+        border = "rounded",
+        position = "center",
+        winblend = 0,
+      },
+    }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return context
+        end },
+        { ui, "_measure_anchor", function()
+          measure_called = true
+          return { top_row = 1, bottom_row = 2, win_col = 0, win_width = 80 }
+        end },
+        { ui, "prompt", function(opts)
+          prompt_opts = opts
+        end },
+        { vim, "notify", function() end },
+      }, function()
+        local ok, err = pcall(init.ask, {})
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.assert(prompt_opts ~= nil, "the prompt should be called")
+    t.equal(false, measure_called, "a centered prompt must not measure the selection")
+    t.equal(nil, prompt_opts.anchor)
+    t.equal("center", prompt_opts.position)
+    t.equal({
+      bufnr = context.bufnr,
+      first = context.first,
+      last = context.last,
+    }, prompt_opts.highlight)
+  end)
+
+  t.test("ask omits the anchor when the current window shows another buffer", function()
+    local original_buf = vim.api.nvim_get_current_buf()
+    local other_buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(other_buf, 0, -1, false, { "one", "two", "three", "four" })
+    local context = make_context({ bufnr = other_buf, first = 2, last = 3 })
+    local prompt_opts
+    local measure_called = false
+
+    local ok, err = pcall(function()
+      with_options({
+        save = false,
+        ui = {
+          width = 80,
+          height = 4,
+          border = "rounded",
+          position = "selection",
+          winblend = 0,
+        },
+      }, function()
+        with_stubs({
+          { selection, "capture", function()
+            return context
+          end },
+          { ui, "_measure_anchor", function()
+            measure_called = true
+            return { top_row = 1, bottom_row = 2, win_col = 0, win_width = 80 }
+          end },
+          { ui, "prompt", function(opts)
+            prompt_opts = opts
+          end },
+          { vim, "notify", function() end },
+        }, function()
+          local ask_ok, ask_err = pcall(init.ask, { bufnr = other_buf, first = 2, last = 3 })
+          t.assert(ask_ok, "ask should not throw: " .. tostring(ask_err))
+        end)
+      end)
+
+      t.assert(prompt_opts ~= nil, "the prompt should be called")
+      t.equal(false, measure_called, "a different current buffer must not be measured")
+      t.equal(nil, prompt_opts.anchor)
+      t.equal({ bufnr = other_buf, first = 2, last = 3 }, prompt_opts.highlight)
+    end)
+
+    pcall(vim.api.nvim_buf_delete, other_buf, { force = true })
+    if vim.api.nvim_buf_is_valid(original_buf) then
+      pcall(vim.api.nvim_set_current_buf, original_buf)
+    end
+    if not ok then
+      error(err, 0)
+    end
+  end)
 end

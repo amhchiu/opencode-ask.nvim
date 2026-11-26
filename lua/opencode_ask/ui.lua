@@ -1,5 +1,7 @@
 local M = {}
 
+local SELECTION_NS = vim.api.nvim_create_namespace("opencode_ask_selection")
+
 local DEFAULT_TITLE = "Ask OpenCode"
 local DEFAULT_WIDTH = 80
 local DEFAULT_HEIGHT = 4
@@ -188,10 +190,11 @@ end
 
 --- Open a floating question prompt.
 ---
---- opts supports title, default, width, height, border, position, winblend, and
---- anchor. on_submit is called with the trimmed question after the float has
---- closed. An empty question leaves the prompt open and emits a warning
---- notification.
+--- opts supports title, default, width, height, border, position, winblend,
+--- anchor, and highlight. highlight may contain bufnr, first, and last to keep
+--- the selected lines highlighted while the prompt is open. on_submit is
+--- called with the trimmed question after the float has closed. An empty
+--- question leaves the prompt open and emits a warning notification.
 function M.prompt(opts, on_submit)
   M.ensure_highlights()
   opts = opts or {}
@@ -209,10 +212,11 @@ function M.prompt(opts, on_submit)
   local bufnr = vim.api.nvim_create_buf(false, true)
   local win
   local closed = false
+  local hl_bufnr
   local submit
   local cancel
 
-  local function close()
+  local function close(autocmd_args)
     if closed then
       return
     end
@@ -220,11 +224,20 @@ function M.prompt(opts, on_submit)
 
     pcall(vim.cmd, "stopinsert")
 
+    if hl_bufnr and vim.api.nvim_buf_is_valid(hl_bufnr) then
+      pcall(vim.api.nvim_buf_clear_namespace, hl_bufnr, SELECTION_NS, 0, -1)
+    end
+
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
     end
 
-    if vim.api.nvim_buf_is_valid(bufnr) then
+    -- When BufWipeout triggers close, the scratch buffer is already being
+    -- wiped; deleting it again raises E937 and aborts the external close.
+    local wiping = type(autocmd_args) == "table"
+      and autocmd_args.event == "BufWipeout"
+      and autocmd_args.buf == bufnr
+    if not wiping and vim.api.nvim_buf_is_valid(bufnr) then
       pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
     end
   end
@@ -236,6 +249,30 @@ function M.prompt(opts, on_submit)
     vim.bo[bufnr].filetype = "markdown"
     vim.b[bufnr].completion = false
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, initial_lines)
+
+    local highlight = opts.highlight
+    if
+      type(highlight) == "table"
+      and type(highlight.first) == "number"
+      and type(highlight.last) == "number"
+      and highlight.bufnr
+      and vim.api.nvim_buf_is_valid(highlight.bufnr)
+    then
+      hl_bufnr = highlight.bufnr
+      pcall(function()
+        local line_count = vim.api.nvim_buf_line_count(hl_bufnr)
+        local first = math.max(1, math.min(highlight.first, line_count))
+        local last = math.max(1, math.min(highlight.last, line_count))
+        vim.api.nvim_buf_clear_namespace(hl_bufnr, SELECTION_NS, 0, -1)
+        vim.api.nvim_buf_set_extmark(hl_bufnr, SELECTION_NS, first - 1, 0, {
+          end_row = last,
+          end_col = 0,
+          hl_group = "OpencodeAskSelection",
+          hl_eol = true,
+          priority = 200,
+        })
+      end)
+    end
 
     local win_config = {
       relative = "editor",
@@ -252,6 +289,14 @@ function M.prompt(opts, on_submit)
     end
 
     win = vim.api.nvim_open_win(bufnr, true, win_config)
+
+    -- Closing the float externally (:q, <C-w>c, nvim_win_close) wipes the
+    -- scratch buffer, so use BufWipeout to run the same cleanup path.
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      buffer = bufnr,
+      once = true,
+      callback = close,
+    })
 
     vim.wo[win].wrap = true
     vim.wo[win].linebreak = true

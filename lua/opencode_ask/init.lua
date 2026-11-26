@@ -130,6 +130,8 @@ function M.ask(opts)
 
   leave_visual_mode()
 
+  local src_win = vim.api.nvim_get_current_win()
+
   if unsavable_buffer(context) then
     notify(
       "the buffer is read-only or not modifiable and has unsaved changes; save the changes before asking",
@@ -138,7 +140,31 @@ function M.ask(opts)
     return
   end
 
-  local prompted, prompt_err = pcall(ui.prompt, { title = context.ref }, function(question)
+  local ui_opts = M.options.ui or {}
+  local anchor = nil
+  if ui_opts.position ~= "center" and vim.api.nvim_win_is_valid(src_win) then
+    local buf_ok, src_bufnr = pcall(vim.api.nvim_win_get_buf, src_win)
+    if buf_ok and src_bufnr == context.bufnr then
+      anchor = ui._measure_anchor(src_win, context.first, context.last)
+    end
+  end
+
+  local prompt_opts = {
+    title = context.ref,
+    width = ui_opts.width,
+    height = ui_opts.height,
+    border = ui_opts.border,
+    position = ui_opts.position,
+    winblend = ui_opts.winblend,
+    anchor = anchor,
+    highlight = {
+      bufnr = context.bufnr,
+      first = context.first,
+      last = context.last,
+    },
+  }
+
+  local prompted, prompt_err = pcall(ui.prompt, prompt_opts, function(question)
     local saved, save_err = selection.save(context)
     if not saved then
       notify(save_err or "could not save the buffer", vim.log.levels.WARN)
