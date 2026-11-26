@@ -4,20 +4,34 @@ local function error_message(message)
   return "opencode-ask: " .. message
 end
 
---- Resolve the normalized project root for a buffer.
---- Accepts 0 for the current buffer.
-function M.project_root(bufnr)
-  bufnr = bufnr or 0
+--- Resolve the normalized project root.
+--- Accepts 0 for the current buffer, a buffer number, or an absolute path
+--- (a directory, or a file inside the project). An absolute path without a
+--- .git marker falls back to that directory, so callers passing a cached
+--- context.project_root get the same key back.
+function M.project_root(target)
+  target = target or 0
 
   local root
-  if bufnr == 0 or vim.api.nvim_buf_is_valid(bufnr) then
-    local ok, found = pcall(vim.fs.root, bufnr, { ".git" })
+  local fallback
+
+  if type(target) == "string" then
+    local path = vim.fs.normalize(target)
+    local is_file = vim.fn.isdirectory(path) == 0 and vim.fn.filereadable(path) == 1
+    fallback = is_file and vim.fs.dirname(path) or path
+
+    local ok, found = pcall(vim.fs.root, path, { ".git" })
+    if ok then
+      root = found
+    end
+  elseif target == 0 or vim.api.nvim_buf_is_valid(target) then
+    local ok, found = pcall(vim.fs.root, target, { ".git" })
     if ok then
       root = found
     end
   end
 
-  root = root or vim.fn.getcwd()
+  root = root or fallback or vim.fn.getcwd()
   return vim.uv.fs_realpath(root) or vim.fs.normalize(root)
 end
 

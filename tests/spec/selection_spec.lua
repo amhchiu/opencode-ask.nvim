@@ -91,6 +91,35 @@ return function(t)
     t.equal(root, resolved)
   end)
 
+  t.test("project_root accepts an absolute path inside a git project", function()
+    local root = make_project()
+    local nested = vim.fs.joinpath(root, "src")
+    local file = vim.fs.joinpath(nested, "file.lua")
+    vim.fn.writefile({ "one line" }, file)
+
+    local from_dir = selection.project_root(nested)
+    local from_file = selection.project_root(file)
+    cleanup(root)
+
+    t.equal(root, from_dir, "directory paths should find the git root")
+    t.equal(root, from_file, "file paths should find the git root")
+  end)
+
+  t.test("project_root falls back to the path when no git root exists", function()
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    dir = vim.uv.fs_realpath(dir) or dir
+    local file = vim.fs.joinpath(dir, "file.lua")
+    vim.fn.writefile({ "one line" }, file)
+
+    local from_dir = selection.project_root(dir)
+    local from_file = selection.project_root(file)
+    cleanup(dir)
+
+    t.equal(dir, from_dir, "directory paths should be their own project key")
+    t.equal(dir, from_file, "file paths without a git root should use their directory")
+  end)
+
   t.test("capture builds a range context for a file with spaces", function()
     local root = make_project()
     local path = vim.fs.joinpath(root, "src", "my file.lua")
