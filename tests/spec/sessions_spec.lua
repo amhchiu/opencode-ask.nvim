@@ -480,7 +480,8 @@ return function(t)
                 "the create label must not be an fzf-lua item"
               )
               t.equal(true, captured.opts.fzf_opts["--no-multi"], "multi-select should be disabled")
-              t.matches("type a title", captured.opts.prompt)
+              t.equal("OpenCode sessions> ", captured.opts.prompt, "the prompt should leave room for the query")
+              t.matches("Type a title", captured.opts.header, "the header should explain creation")
               t.equal(0, calls, "the callback must wait for Enter")
 
               captured.opts.actions.enter({}, { last_query = "New session" })
