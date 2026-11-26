@@ -200,6 +200,61 @@ local function validate_session(session)
   return session
 end
 
+--- Post a JSON payload to an OpenCode API path.
+--- Calls callback(err, body) exactly once from the main loop. API failures
+--- are typed tables with a `kind` field.
+local function post_json(path, payload, cwd, callback)
+  local done = once(type(callback) == "function" and callback or function() end)
+
+  vim.schedule(function()
+    local opts = options()
+    local api = type(opts.api) == "table" and opts.api or {}
+    local command = api.command or "opencode"
+
+    if type(command) ~= "string" or command == "" or vim.fn.executable(command) ~= 1 then
+      done(typed_error(
+        "executable_not_found",
+        ("'%s' is not executable; install OpenCode or configure api.command"):format(tostring(command)),
+        { command = command }
+      ))
+      return
+    end
+
+    local encoded_ok, encoded = pcall(vim.json.encode, payload)
+    if not encoded_ok or type(encoded) ~= "string" then
+      done(typed_error("payload_error", "could not encode the prompt payload: " .. tostring(encoded)))
+      return
+    end
+
+    local argv = {
+      command,
+      "api",
+      "post",
+      path,
+      "--data",
+      encoded,
+    }
+
+    local started, process_or_err = pcall(vim.system, argv, {
+      cwd = cwd,
+      text = true,
+      timeout = api.timeout,
+    }, function(result)
+      vim.schedule(function()
+        local err, response = M.classify(result)
+        done(err, response)
+      end)
+    end)
+
+    if not started then
+      done(typed_error("spawn_error", ("could not run '%s api post': %s"):format(command, tostring(process_or_err)), {
+        command = command,
+        cwd = cwd,
+      }))
+    end
+  end)
+end
+
 --- Send a question and selection context to an OpenCode session.
 --- Calls callback(err, result) exactly once from the main loop. API failures
 --- are typed tables with a `kind` field; local validation failures are
@@ -223,60 +278,75 @@ function M.send(session, question, context, callback)
     return
   end
 
-  vim.schedule(function()
-    local opts = options()
-    local api = type(opts.api) == "table" and opts.api or {}
-    local command = api.command or "opencode"
+  local cwd = session.directory
+  if type(cwd) ~= "string" or cwd == "" then
+    cwd = context.project_root
+  end
+  if type(cwd) ~= "string" or cwd == "" then
+    cwd = nil
+  end
 
-    if type(command) ~= "string" or command == "" or vim.fn.executable(command) ~= 1 then
-      done(typed_error(
-        "executable_not_found",
-        ("'%s' is not executable; install OpenCode or configure api.command"):format(tostring(command)),
-        { command = command }
-      ))
-      return
-    end
+  post_json("/api/session/" .. session.id .. "/prompt", payload, cwd, done)
+end
 
-    local encoded_ok, encoded = pcall(vim.json.encode, payload)
-    if not encoded_ok or type(encoded) ~= "string" then
-      done(typed_error("payload_error", "could not encode the prompt payload: " .. tostring(encoded)))
-      return
-    end
+--- Create an OpenCode session for a directory with an explicit title.
+--- Calls callback(err, session) exactly once from the main loop. The session
+--- has the shape { id, title, directory, updated }. Local validation failures
+--- are descriptive strings; API and spawn failures are typed tables.
+function M.create_session(cwd, title, callback)
+  local done = once(type(callback) == "function" and callback or function() end)
 
-    local cwd = session.directory
-    if type(cwd) ~= "string" or cwd == "" then
-      cwd = context.project_root
-    end
-    if type(cwd) ~= "string" or cwd == "" then
-      cwd = nil
-    end
-
-    local argv = {
-      command,
-      "api",
-      "post",
-      "/api/session/" .. session.id .. "/prompt",
-      "--data",
-      encoded,
-    }
-
-    local started, process_or_err = pcall(vim.system, argv, {
-      cwd = cwd,
-      text = true,
-      timeout = api.timeout,
-    }, function(result)
-      vim.schedule(function()
-        local err, response = M.classify(result)
-        done(err, response)
-      end)
+  if type(cwd) ~= "string" or vim.trim(cwd) == "" then
+    vim.schedule(function()
+      done(error_message("cwd must be a non-empty string"))
     end)
+    return
+  end
 
-    if not started then
-      done(typed_error("spawn_error", ("could not run '%s api post': %s"):format(command, tostring(process_or_err)), {
-        command = command,
-        cwd = cwd,
-      }))
+  if type(title) ~= "string" or vim.trim(title) == "" then
+    vim.schedule(function()
+      done(error_message("title must be a non-empty string"))
+    end)
+    return
+  end
+
+  local trimmed_cwd = vim.trim(cwd)
+  local trimmed_title = vim.trim(title)
+
+  post_json("/api/session", {
+    title = trimmed_title,
+    location = { directory = trimmed_cwd },
+  }, trimmed_cwd, function(err, body)
+    if err then
+      done(err)
+      return
     end
+
+    if
+      type(body) ~= "table"
+      or type(body.data) ~= "table"
+      or type(body.data.id) ~= "string"
+      or vim.trim(body.data.id) == ""
+    then
+      done(typed_error("invalid_response", "opencode api post /api/session did not return a session id"))
+      return
+    end
+
+    local response_title = type(body.data.title) == "string" and vim.trim(body.data.title) or ""
+    local response_dir = type(body.data.location) == "table"
+        and type(body.data.location.directory) == "string"
+        and vim.trim(body.data.location.directory)
+      or ""
+
+    done(nil, {
+      id = vim.trim(body.data.id),
+      title = response_title ~= "" and response_title or trimmed_title,
+      directory = response_dir ~= "" and response_dir or trimmed_cwd,
+      updated = type(body.data.time) == "table"
+          and type(body.data.time.updated) == "number"
+          and body.data.time.updated
+        or (os.time() * 1000),
+    })
   end)
 end
 

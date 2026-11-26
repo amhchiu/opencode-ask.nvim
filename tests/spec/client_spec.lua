@@ -85,6 +85,44 @@ local function run_send(session, question, context, system_stub, api)
   return calls, got_err, got_response, argv, system_opts
 end
 
+--- Run client.create_session with a stubbed vim.system and wait for its callback.
+--- Returns calls, err, session, argv, system_opts.
+local function run_create(cwd, title, system_stub, api)
+  local calls = 0
+  local got_err, got_session
+  local argv, system_opts
+  local finished = false
+
+  with_options({ api = api }, function()
+    with_stub(vim, "system", function(cmd, opts, on_exit)
+      argv = cmd
+      system_opts = opts
+      return system_stub(cmd, opts, on_exit)
+    end, function()
+      local ok, call_err = pcall(client.create_session, cwd, title, function(err, session)
+        calls = calls + 1
+        got_err = err
+        got_session = session
+        finished = true
+      end)
+
+      if not ok then
+        error("create_session threw: " .. tostring(call_err), 0)
+      end
+      if not vim.wait(2000, function()
+        return finished
+      end, 10) then
+        error("create_session callback did not run", 0)
+      end
+
+      -- Give a mistakenly queued second callback a chance to surface.
+      vim.wait(20)
+    end)
+  end)
+
+  return calls, got_err, got_session, argv, system_opts
+end
+
 local function expect_build_error(question, context)
   local ok, payload, err = pcall(client.build_payload, question, context)
   return ok, payload, err
@@ -460,5 +498,237 @@ return function(t)
       t.equal(1, calls, "invalid input should still call back exactly once")
       t.matches(case.pattern, err)
     end
+  end)
+
+  t.test("create_session posts the trimmed payload with configured options", function()
+    local expected_payload = {
+      title = "New session",
+      location = { directory = "/tmp/my project" },
+    }
+    local expected_encoded = vim.json.encode(expected_payload)
+
+    local calls, err, session, argv, opts = run_create(
+      "/tmp/my project",
+      "  New session  ",
+      function(_, _, on_exit)
+        on_exit({
+          code = 0,
+          stdout = '{"data":{"id":"ses_created","title":"New session","location":{"directory":"/tmp/my project"},"time":{"updated":1700000000123}}}',
+          stderr = "",
+        })
+        return { pid = 0 }
+      end,
+      { command = vim.v.progpath, timeout = 4321 }
+    )
+
+    t.equal(1, calls, "the callback should run exactly once")
+    t.equal(nil, err)
+    t.equal("ses_created", session.id)
+    t.equal("New session", session.title)
+    t.equal("/tmp/my project", session.directory)
+    t.equal(1700000000123, session.updated)
+
+    t.equal(6, #argv)
+    t.equal(vim.v.progpath, argv[1])
+    t.equal("api", argv[2])
+    t.equal("post", argv[3])
+    t.equal("/api/session", argv[4])
+    t.equal("--data", argv[5])
+    t.equal(expected_encoded, argv[6])
+    t.equal(expected_payload, vim.json.decode(argv[6]))
+    t.equal("/tmp/my project", opts.cwd)
+    t.equal(true, opts.text)
+    t.equal(4321, opts.timeout)
+  end)
+
+  t.test("create_session falls back to the request values for missing response metadata", function()
+    local before = os.time() * 1000
+
+    local calls, err, session = run_create(
+      "/tmp/project",
+      "Fallback title",
+      function(_, _, on_exit)
+        on_exit({ code = 0, stdout = '{"data":{"id":"ses_created"}}', stderr = "" })
+        return { pid = 0 }
+      end,
+      { command = vim.v.progpath, timeout = 1234 }
+    )
+
+    local after = os.time() * 1000
+
+    t.equal(1, calls)
+    t.equal(nil, err)
+    t.equal("ses_created", session.id)
+    t.equal("Fallback title", session.title)
+    t.equal("/tmp/project", session.directory)
+    t.assert(session.updated >= before, "updated should fall back to the current time")
+    t.assert(session.updated <= after, "updated should fall back to the current time")
+
+    calls, err, session = run_create(
+      "/tmp/project",
+      "Fallback title",
+      function(_, _, on_exit)
+        on_exit({
+          code = 0,
+          stdout = '{"data":{"id":"ses_created","title":"   ","location":{"directory":"  "}}}',
+          stderr = "",
+        })
+        return { pid = 0 }
+      end,
+      { command = vim.v.progpath, timeout = 1234 }
+    )
+
+    t.equal(1, calls)
+    t.equal(nil, err)
+    t.equal("Fallback title", session.title)
+    t.equal("/tmp/project", session.directory)
+  end)
+
+  t.test("create_session rejects responses without a usable session id", function()
+    local outputs = {
+      "{}",
+      '{"data":{}}',
+      '{"data":{"id":""}}',
+      '{"data":{"id":"   "}}',
+      '{"data":{"title":"No id"}}',
+      "not json",
+      "",
+    }
+
+    for _, stdout in ipairs(outputs) do
+      local calls, err, session = run_create(
+        "/tmp/project",
+        "Title",
+        function(_, _, on_exit)
+          on_exit({ code = 0, stdout = stdout, stderr = "" })
+          return { pid = 0 }
+        end,
+        { command = vim.v.progpath, timeout = 1234 }
+      )
+
+      t.equal(1, calls, "invalid responses should call back exactly once")
+      t.equal(nil, session)
+      t.equal("invalid_response", err.kind)
+      t.equal("opencode api post /api/session did not return a session id", err.message)
+    end
+  end)
+
+  t.test("create_session returns a typed timeout error exactly once", function()
+    local calls, err, session = run_create(
+      "/tmp/project",
+      "Title",
+      function(_, _, on_exit)
+        on_exit({ code = 124, stdout = "", stderr = "" })
+        return { pid = 0 }
+      end,
+      { command = vim.v.progpath, timeout = 5555 }
+    )
+
+    t.equal(1, calls)
+    t.equal(nil, session)
+    t.equal("timeout", err.kind)
+    t.equal(5555, err.timeout)
+    t.matches("5555", err.message)
+  end)
+
+  t.test("create_session returns API errors with the decoded message", function()
+    local calls, err, session = run_create(
+      "/tmp/project",
+      "Title",
+      function(_, _, on_exit)
+        on_exit({
+          code = 1,
+          stdout = '{"message":"title is invalid"}',
+          stderr = "HTTP 400 Bad Request",
+        })
+        return { pid = 0 }
+      end,
+      { command = vim.v.progpath, timeout = 1234 }
+    )
+
+    t.equal(1, calls)
+    t.equal(nil, session)
+    t.equal("api_error", err.kind)
+    t.equal("title is invalid", err.message)
+  end)
+
+  t.test("create_session reports a missing executable as a typed error", function()
+    local calls, err = run_create(
+      "/tmp/project",
+      "Title",
+      function()
+        error("vim.system should not be called when the command is missing")
+      end,
+      { command = "opencode-ask-missing-cli-for-tests", timeout = 1234 }
+    )
+
+    t.equal(1, calls)
+    t.equal("executable_not_found", err.kind)
+    t.equal("opencode-ask-missing-cli-for-tests", err.command)
+    t.matches("not executable", err.message)
+  end)
+
+  t.test("create_session reports a spawn failure as a typed error without throwing", function()
+    local calls, err = run_create(
+      "/tmp/project",
+      "Title",
+      function()
+        error("spawn exploded")
+      end,
+      { command = vim.v.progpath, timeout = 1234 }
+    )
+
+    t.equal(1, calls)
+    t.equal("spawn_error", err.kind)
+    t.matches("spawn exploded", err.message)
+  end)
+
+  t.test("create_session validates cwd and title before spawning", function()
+    local cases = {
+      { cwd = nil, title = "Title", pattern = "cwd" },
+      { cwd = 42, title = "Title", pattern = "cwd" },
+      { cwd = "", title = "Title", pattern = "cwd" },
+      { cwd = "   ", title = "Title", pattern = "cwd" },
+      { cwd = "/tmp/project", title = nil, pattern = "title" },
+      { cwd = "/tmp/project", title = 42, pattern = "title" },
+      { cwd = "/tmp/project", title = "", pattern = "title" },
+      { cwd = "/tmp/project", title = "   ", pattern = "title" },
+    }
+
+    for _, case in ipairs(cases) do
+      local calls, err = run_create(case.cwd, case.title, function()
+        error("vim.system should not be called for invalid input")
+      end, { command = vim.v.progpath, timeout = 1234 })
+
+      t.equal(1, calls, "invalid input should still call back exactly once")
+      t.matches(case.pattern, err)
+      t.matches("^opencode%-ask: ", err)
+    end
+  end)
+
+  t.test("create_session does not throw for a non-function callback", function()
+    for _, callback in ipairs({ true, "callback" }) do
+      with_options({ api = { command = vim.v.progpath, timeout = 1234 } }, function()
+        with_stub(vim, "system", function(_, _, on_exit)
+          on_exit({ code = 0, stdout = '{"data":{"id":"ses_created"}}', stderr = "" })
+          return { pid = 0 }
+        end, function()
+          local ok, call_err = pcall(client.create_session, "/tmp/project", "Title", callback)
+          t.assert(ok, "create_session should not throw: " .. tostring(call_err))
+          vim.wait(20)
+        end)
+      end)
+    end
+
+    with_options({ api = { command = vim.v.progpath, timeout = 1234 } }, function()
+      with_stub(vim, "system", function(_, _, on_exit)
+        on_exit({ code = 0, stdout = '{"data":{"id":"ses_created"}}', stderr = "" })
+        return { pid = 0 }
+      end, function()
+        local ok, call_err = pcall(client.create_session, "/tmp/project", "Title")
+        t.assert(ok, "create_session should not throw without a callback: " .. tostring(call_err))
+        vim.wait(20)
+      end)
+    end)
   end)
 end
