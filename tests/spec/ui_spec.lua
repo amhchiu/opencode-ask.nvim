@@ -91,6 +91,34 @@ return function(t)
     t.equal("a\n  b\nc", ui._trim_question("  a\n  b\nc  "))
   end)
 
+  t.test("ensure_highlights links the plugin groups to the standard float groups", function()
+    ui.ensure_highlights()
+
+    local expected = {
+      OpencodeAskNormal = "NormalFloat",
+      OpencodeAskBorder = "FloatBorder",
+      OpencodeAskTitle = "FloatTitle",
+      OpencodeAskSelection = "Visual",
+    }
+    for name, target in pairs(expected) do
+      local hl = vim.api.nvim_get_hl(0, { name = name })
+      t.equal(target, hl.link, name .. " should link to " .. target)
+    end
+  end)
+
+  t.test("ensure_highlights does not overwrite an explicit highlight group", function()
+    vim.api.nvim_set_hl(0, "OpencodeAskBorder", { fg = "#ff0000" })
+    ui.ensure_highlights()
+
+    local hl = vim.api.nvim_get_hl(0, { name = "OpencodeAskBorder" })
+    t.equal(0xff0000, hl.fg, "the custom fg should be preserved")
+    t.equal(nil, hl.link, "the custom group should not be re-linked")
+
+    -- Restore the default link so later tests see the module's standard state.
+    vim.api.nvim_set_hl(0, "OpencodeAskBorder", { link = "FloatBorder" })
+    t.equal("FloatBorder", vim.api.nvim_get_hl(0, { name = "OpencodeAskBorder" }).link)
+  end)
+
   t.test("prompt cleans up when setup fails after opening", function()
     local function float_count()
       local count = 0

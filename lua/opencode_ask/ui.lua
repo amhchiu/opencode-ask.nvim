@@ -6,6 +6,25 @@ local DEFAULT_HEIGHT = 4
 local MIN_WIDTH = 20
 local BORDER_COLUMNS = 2
 
+local HIGHLIGHT_LINKS = {
+  { "OpencodeAskNormal", "NormalFloat" },
+  { "OpencodeAskBorder", "FloatBorder" },
+  { "OpencodeAskTitle", "FloatTitle" },
+  { "OpencodeAskSelection", "Visual" },
+}
+
+--- Define the plugin's highlight groups without overriding user overrides.
+---
+--- `default = true` keeps explicitly defined groups intact while restoring the
+--- default links after a colorscheme runs `:highlight clear`.
+function M.ensure_highlights()
+  for _, group in ipairs(HIGHLIGHT_LINKS) do
+    vim.api.nvim_set_hl(0, group[1], { link = group[2], default = true })
+  end
+end
+
+M.ensure_highlights()
+
 --- Truncate a title without splitting a multibyte character.
 local function truncate_title(title, max_chars)
   if max_chars <= 0 then
@@ -75,6 +94,7 @@ end
 --- the trimmed question after the float has closed. An empty question leaves
 --- the prompt open and emits a warning notification.
 function M.prompt(opts, on_submit)
+  M.ensure_highlights()
   opts = opts or {}
   if on_submit ~= nil and type(on_submit) ~= "function" then
     error("opencode-ask: on_submit must be a function", 2)
