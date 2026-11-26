@@ -134,6 +134,89 @@ return function(t)
     t.matches("src/example.lua:2%-4", notifications[1].message)
   end)
 
+  t.test("ask creates, stores, and sends to a session through the real picker path", function()
+    local dir = vim.fn.tempname()
+    local project = vim.fs.joinpath(dir, "project")
+    vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+    project = vim.uv.fs_realpath(project) or project
+    local state_path = vim.fs.joinpath(dir, "state", "sessions.json")
+    local context = make_context({ project_root = project })
+    local created = {
+      id = "ses_created",
+      title = "Created session",
+      directory = project,
+      updated = 1794403014222,
+    }
+    local creation = {}
+    local sent = {}
+    local notifications = {}
+
+    local ok, err = pcall(function()
+      with_options({ save = true, session = nil, state_path = state_path, picker = "none" }, function()
+        with_stubs({
+          { selection, "capture", function()
+            return context
+          end },
+          { ui, "prompt", function(_, on_submit)
+            on_submit("What does this code do?")
+          end },
+          { selection, "save", function()
+            return true
+          end },
+          { sessions, "list", function(root, callback)
+            t.equal(project, root)
+            callback(nil, {})
+          end },
+          { vim.ui, "select", function(items, opts, callback)
+            t.equal("OpenCode sessions", opts.prompt)
+            t.equal({ sessions.CREATE_SESSION_LABEL }, items)
+            callback(sessions.CREATE_SESSION_LABEL)
+          end },
+          { vim.ui, "input", function(opts, callback)
+            t.equal("New OpenCode session title: ", opts.prompt)
+            callback("Created session")
+          end },
+          { client, "create_session", function(root, title, callback)
+            creation.root = root
+            creation.title = title
+            callback(nil, created)
+          end },
+          { client, "send", function(session, question, sent_context, callback)
+            sent.session = session
+            sent.question = question
+            sent.context = sent_context
+            callback(nil, { accepted = true })
+          end },
+          { vim, "notify", notification_stub(notifications) },
+        }, function()
+          local ask_ok, ask_err = pcall(init.ask, { first = 2, last = 4 })
+          t.assert(ask_ok, "ask should not throw: " .. tostring(ask_err))
+        end)
+
+        t.equal(project, creation.root, "creation should use the project root")
+        t.equal("Created session", creation.title, "creation should use the entered title")
+        t.equal(created, sent.session, "the created session should be passed to send")
+        t.equal("What does this code do?", sent.question)
+        t.equal(context, sent.context)
+        t.equal({
+          id = "ses_created",
+          title = "Created session",
+          directory = project,
+          updated = 1794403014222,
+        }, sessions.read_state().projects[selection.project_root(project)],
+          "the created session should be stored under the project key")
+        t.equal(1, #notifications)
+        t.equal(INFO, notifications[1].level)
+        t.matches("Sent to Created session", notifications[1].message)
+      end)
+    end)
+
+    vim.fn.delete(dir, "rf")
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
   t.test("ask notifies when the selection cannot be captured", function()
     local prompt_called = false
     local notifications = {}

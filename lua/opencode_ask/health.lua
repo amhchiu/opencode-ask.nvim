@@ -208,7 +208,7 @@ local function check_sessions(command)
     emit(
       "info",
       ("OpenCode returned no sessions for %s. Sessions are project-scoped; "
-        .. "start one in the OpenCode TUI, then run :OpencodeSession."):format(cwd)
+        .. ":OpencodeSession can create a new session when the query has no matches."):format(cwd)
     )
     return
   end
@@ -265,7 +265,7 @@ local function check_state()
   end
 
   if vim.fn.filereadable(path) ~= 1 then
-    emit("info", ("No state file yet at %s; it is created when you choose a session."):format(path))
+    emit("info", ("No state file yet at %s; it is created when you choose or create a session."):format(path))
     return
   end
 

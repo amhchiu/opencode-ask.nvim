@@ -2,8 +2,8 @@
 
 Ask OpenCode about a visual selection without leaving Neovim. The plugin
 captures the selected file and line range, opens a floating question prompt,
-and sends the question to a chosen OpenCode session. Answers are read in the
-OpenCode TUI.
+and sends the question to the OpenCode session selected or created for the
+project. Answers are still read in the OpenCode TUI.
 
 The chosen session is remembered per project, so follow-up questions continue
 the same conversation across Neovim restarts.
@@ -85,7 +85,7 @@ This configuration does not set a leader, so the default mapping is `\oq`.
 | --- | --- | --- |
 | `<leader>oq` | Visual (`x`) | Ask about the selected lines. |
 | `:OpencodeAsk [range]` | Command | Ask about the given range, or the current line without a range. |
-| `:OpencodeSession` | Command | Choose and store the OpenCode session for the current project. |
+| `:OpencodeSession` | Command | Choose an existing session or create a new one for the current project. |
 | `:OpencodeSessionClear` | Command | Forget the stored session for the current project. |
 | `:checkhealth opencode_ask` | Command | Check the CLI, OpenCode service, session listing, state directory, state file, and picker. |
 
@@ -99,15 +99,22 @@ Prompt controls:
 
 ## Workflow
 
-### First-time session selection
+### First-time session selection or creation
 
-1. Open the OpenCode TUI in the project and create or start a session.
-2. In Neovim, run `:OpencodeSession` and pick that session.
-3. The choice is stored for the project, keyed by its normalized project
-   root (the Git root, or the current directory when there is no `.git`).
+1. In Neovim, run `:OpencodeSession`.
+2. With the fzf-lua picker, start typing. Selecting a matching session chooses
+   it. Type a new title and press Enter when there are no matches to create a
+   session with that title.
+3. Without fzf-lua, `vim.ui.select` lists the sessions plus a
+   **Create new session…** entry. Choose that entry and enter a title.
+4. The chosen or created session is stored for the project, keyed by its
+   normalized project root (the Git root, or the current directory when there
+   is no `.git`).
 
-If no session is stored and `session` is not pinned, asking opens the session
-picker automatically. Cancelling the picker quietly does nothing.
+You can also create or start a session in the OpenCode TUI and then select it
+here. If no session is stored and `session` is not pinned, asking opens the
+same picker automatically, so you can create and use a session in one flow.
+Cancelling the picker quietly does nothing.
 
 ### Asking about a selection
 
@@ -126,7 +133,8 @@ a file attachment URI with the line range.
 
 Ask again from the same project. The stored session is reused without another
 picker, so the question joins the same conversation. The selection can be in a
-different file or line range.
+different file or line range. A stored session is never duplicated by a
+follow-up question.
 
 ### Across Neovim restarts
 
@@ -134,7 +142,10 @@ The stored session lives on disk and is reused after restarting Neovim.
 
 ### Switching or clearing a session
 
-- `:OpencodeSession` picks a different session for the project.
+- `:OpencodeSession` picks a different session for the project. Selecting a
+  matching session never creates a duplicate; creation happens only when the
+  typed query has no matches (or when you choose **Create new session…** in
+  `vim.ui.select`).
 - `:OpencodeSessionClear` removes the stored entry. The next question opens the
   picker again.
 - Setting `session` pins one session for every project.
@@ -162,12 +173,14 @@ Print the effective path with:
 
 The file is keyed by normalized project root and stores only `id`, `title`,
 `directory`, and `updated` for each project. It never stores prompts, file
-contents, credentials, or API responses.
+contents, credentials, or API responses. The file is created when you choose
+or create a session.
 
 Reset one project with `:OpencodeSessionClear`. Reset everything by deleting
-the file; the plugin recreates it the next time a session is chosen. A corrupt
-state file is treated as empty and can be deleted or rewritten by choosing a
-session again. `:checkhealth opencode_ask` reports corruption with the path.
+the file; the plugin recreates it the next time a session is chosen or created.
+A corrupt state file is treated as empty and can be deleted or rewritten by
+choosing or creating a session again. `:checkhealth opencode_ask` reports
+corruption with the path.
 
 ## Limitations
 
@@ -176,7 +189,9 @@ session again. `:checkhealth opencode_ask` reports corruption with the path.
 - Prompts sent to an active session are delivered through OpenCode V2's
   session inbox/steering; the plugin does not queue, retry, or cancel them.
 - OpenCode permission requests are approved in the TUI.
-- The plugin does not create sessions. Start one in OpenCode first.
+- The plugin can create a session from the session picker. It cannot rename or
+  delete sessions, and it cannot create one when the OpenCode CLI or service is
+  unavailable.
 - OpenCode V1 and Windows are not supported.
 
 ## Troubleshooting
@@ -199,8 +214,11 @@ opencode api get /api/info
 **No sessions for the project**
 
 An empty session list is valid. Sessions are project-scoped, so a session
-started in another directory may not appear. Start a session for this project
-in the OpenCode TUI, then run `:OpencodeSession`.
+started in another directory may not appear. The primary recovery is to create
+one from the picker: run `:OpencodeSession`, type a new title, and press Enter
+when there are no matches. With `vim.ui.select`, choose
+**Create new session…** and enter a title. You can also start a session for
+this project in the OpenCode TUI and select it here.
 
 **Session was deleted or the ID is invalid**
 
