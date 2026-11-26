@@ -19,15 +19,13 @@ the same conversation across Neovim restarts.
 
 ## Installation
 
-The plugin is loaded eagerly from its checkout through lazy.nvim. Eager
-loading avoids losing the visual selection while a lazy key handler loads the
-plugin.
+The plugin is loaded eagerly from GitHub through lazy.nvim. Eager loading
+avoids losing the visual selection while a lazy key handler loads the plugin.
 
 ```lua
--- ~/.dotfiles/nvim/.config/nvim/lua/plugins/opencode-ask.lua
+-- ~/.config/nvim/lua/plugins/opencode-ask.lua
 return {
-  dir = "~/projects/nvim-plugins/opencode-ask.nvim",
-  name = "opencode-ask",
+  "amhchiu/opencode-ask.nvim",
   main = "opencode_ask",
   lazy = false,
   opts = {},
@@ -38,8 +36,7 @@ A customized configuration:
 
 ```lua
 return {
-  dir = "~/projects/nvim-plugins/opencode-ask.nvim",
-  name = "opencode-ask",
+  "amhchiu/opencode-ask.nvim",
   main = "opencode_ask",
   lazy = false,
   opts = {
