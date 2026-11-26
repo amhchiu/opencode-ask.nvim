@@ -1,0 +1,692 @@
+local init = require("opencode_ask")
+local client = require("opencode_ask.client")
+local selection = require("opencode_ask.selection")
+local sessions = require("opencode_ask.sessions")
+local ui = require("opencode_ask.ui")
+
+local source = debug.getinfo(1, "S").source:sub(2)
+local spec_dir = vim.fs.dirname(source)
+local repo_root = vim.fs.dirname(vim.fs.dirname(spec_dir))
+local plugin_path = vim.fs.joinpath(repo_root, "plugin", "opencode_ask.lua")
+
+local INFO = vim.log.levels.INFO
+local WARN = vim.log.levels.WARN
+
+local function with_options(changes, fn)
+  local original = init.options
+  local options = {}
+  for key, value in pairs(original) do
+    options[key] = value
+  end
+  for key, value in pairs(changes or {}) do
+    options[key] = value
+  end
+
+  init.options = options
+  local ok, err = pcall(fn)
+  init.options = original
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local function with_stubs(stubs, fn)
+  local saved = {}
+  for index, stub in ipairs(stubs) do
+    local owner, key = stub[1], stub[2]
+    saved[index] = owner[key]
+    owner[key] = stub[3]
+  end
+
+  local ok, err = pcall(fn)
+
+  for index = #stubs, 1, -1 do
+    local owner, key = stubs[index][1], stubs[index][2]
+    owner[key] = saved[index]
+  end
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local function notification_stub(notifications)
+  return function(message, level)
+    notifications[#notifications + 1] = { message = message, level = level }
+  end
+end
+
+local function make_context(overrides)
+  local context = {
+    bufnr = vim.api.nvim_get_current_buf(),
+    absolute = "/tmp/project/src/example.lua",
+    relative = "src/example.lua",
+    project_root = "/tmp/project",
+    first = 2,
+    last = 4,
+    ref = "src/example.lua:2-4",
+    mention = "@src/example.lua#2-4",
+    uri = "file:///tmp/project/src/example.lua?start=2&end=4",
+  }
+  for key, value in pairs(overrides or {}) do
+    context[key] = value
+  end
+  return context
+end
+
+local function delete_mapping(mode, key)
+  pcall(vim.keymap.del, mode, key)
+end
+
+return function(t)
+  t.test("ask captures, prompts, saves, resolves, and sends", function()
+    local context = make_context()
+    local capture_opts, prompt_opts, saved_context, resolve_root, sent
+    local notifications = {}
+
+    with_options({ save = true, session = nil }, function()
+      with_stubs({
+        { selection, "capture", function(opts)
+          capture_opts = opts
+          return context
+        end },
+        { ui, "prompt", function(opts, on_submit)
+          prompt_opts = opts
+          on_submit("What does this code do?")
+        end },
+        { selection, "save", function(ctx)
+          saved_context = ctx
+          return true
+        end },
+        { sessions, "resolve", function(root, callback)
+          resolve_root = root
+          callback(nil, { id = "ses_test", title = "Test session" })
+        end },
+        { client, "send", function(session, question, ctx, callback)
+          sent = { session = session, question = question, context = ctx }
+          callback(nil, { accepted = true })
+        end },
+        { vim, "notify", notification_stub(notifications) },
+      }, function()
+        local ok, err = pcall(init.ask, { first = 2, last = 4 })
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.equal({ first = 2, last = 4 }, capture_opts, "ask should pass its range to capture")
+    t.equal(context.ref, prompt_opts.title, "the prompt title should be the selection ref")
+    t.equal(context, saved_context, "save should receive the captured context")
+    t.equal(context.project_root, resolve_root, "resolve should use the project root")
+    t.equal("ses_test", sent.session.id)
+    t.equal("What does this code do?", sent.question)
+    t.equal(context, sent.context)
+
+    t.equal(1, #notifications, "only the success notification should be shown")
+    t.equal(INFO, notifications[1].level)
+    t.matches("Sent to Test session", notifications[1].message)
+    t.matches("src/example.lua:2%-4", notifications[1].message)
+  end)
+
+  t.test("ask notifies when the selection cannot be captured", function()
+    local prompt_called = false
+    local notifications = {}
+
+    with_options({ save = true }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return nil, "opencode-ask: capture failed"
+        end },
+        { ui, "prompt", function()
+          prompt_called = true
+        end },
+        { vim, "notify", notification_stub(notifications) },
+      }, function()
+        local ok, err = pcall(init.ask, {})
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.equal(false, prompt_called, "the prompt must not open without a context")
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("capture failed", notifications[1].message)
+  end)
+
+  t.test("ask aborts on a modified read-only buffer before prompting", function()
+    local function expect_abort(configure)
+      local path = vim.fn.tempname() .. ".lua"
+      vim.fn.writefile({ "local x = 1", "local y = 2" }, path)
+      local original_buf = vim.api.nvim_get_current_buf()
+      local buffer
+
+      local ok, err = pcall(function()
+        vim.cmd("edit " .. vim.fn.fnameescape(path))
+        buffer = vim.api.nvim_get_current_buf()
+        vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "local x = 1", "local y = 2", "local z = 3" })
+        configure(buffer)
+
+        local context = make_context({ bufnr = buffer })
+        local prompt_called = false
+        local notifications = {}
+
+        with_options({ save = true }, function()
+          with_stubs({
+            { selection, "capture", function()
+              return context
+            end },
+            { ui, "prompt", function()
+              prompt_called = true
+            end },
+            { vim, "notify", notification_stub(notifications) },
+          }, function()
+            local call_ok, call_err = pcall(init.ask, {})
+            t.assert(call_ok, "ask should not throw: " .. tostring(call_err))
+          end)
+        end)
+
+        t.equal(false, prompt_called, "the prompt must not open for an unsavable buffer")
+        t.equal(1, #notifications)
+        t.equal(WARN, notifications[1].level)
+        t.matches("read%-only or not modifiable", notifications[1].message)
+      end)
+
+      if buffer and vim.api.nvim_buf_is_valid(buffer) then
+        pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+      end
+      vim.fn.delete(path)
+      if vim.api.nvim_buf_is_valid(original_buf) then
+        pcall(vim.api.nvim_set_current_buf, original_buf)
+      end
+      if not ok then
+        error(err, 0)
+      end
+    end
+
+    expect_abort(function(buffer)
+      vim.bo[buffer].readonly = true
+    end)
+    expect_abort(function(buffer)
+      vim.bo[buffer].modifiable = false
+    end)
+  end)
+
+  t.test("ask aborts when saving the captured buffer fails", function()
+    local context = make_context()
+    local save_called = false
+    local resolve_called = false
+    local send_called = false
+    local notifications = {}
+
+    with_options({ save = true }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return context
+        end },
+        { ui, "prompt", function(_, on_submit)
+          on_submit("Why?")
+        end },
+        { selection, "save", function()
+          save_called = true
+          return nil, "opencode-ask: save failed"
+        end },
+        { sessions, "resolve", function()
+          resolve_called = true
+        end },
+        { client, "send", function()
+          send_called = true
+        end },
+        { vim, "notify", notification_stub(notifications) },
+      }, function()
+        local ok, err = pcall(init.ask, {})
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.equal(true, save_called)
+    t.equal(false, resolve_called, "resolve must not run after a save failure")
+    t.equal(false, send_called, "send must not run after a save failure")
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("save failed", notifications[1].message)
+  end)
+
+  t.test("ask notifies when session resolution fails", function()
+    local context = make_context()
+    local send_called = false
+    local notifications = {}
+
+    with_options({ save = true }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return context
+        end },
+        { ui, "prompt", function(_, on_submit)
+          on_submit("Why?")
+        end },
+        { selection, "save", function()
+          return true
+        end },
+        { sessions, "resolve", function(_, callback)
+          callback("opencode-ask: resolve exploded")
+        end },
+        { client, "send", function()
+          send_called = true
+        end },
+        { vim, "notify", notification_stub(notifications) },
+      }, function()
+        local ok, err = pcall(init.ask, {})
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.equal(false, send_called, "send must not run after a resolve error")
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("resolve exploded", notifications[1].message)
+  end)
+
+  t.test("ask notifies client errors as strings or tables", function()
+    local context = make_context()
+
+    local function run(send_err)
+      local notifications = {}
+
+      with_options({ save = true }, function()
+        with_stubs({
+          { selection, "capture", function()
+            return context
+          end },
+          { ui, "prompt", function(_, on_submit)
+            on_submit("Why?")
+          end },
+          { selection, "save", function()
+            return true
+          end },
+          { sessions, "resolve", function(_, callback)
+            callback(nil, { id = "ses_test", title = "Test" })
+          end },
+          { client, "send", function(_, _, _, callback)
+            callback(send_err)
+          end },
+          { vim, "notify", notification_stub(notifications) },
+        }, function()
+          local ok, err = pcall(init.ask, {})
+          t.assert(ok, "ask should not throw: " .. tostring(err))
+        end)
+      end)
+
+      return notifications
+    end
+
+    local string_notifications = run("opencode-ask: string failure")
+    t.equal(1, #string_notifications)
+    t.equal(WARN, string_notifications[1].level)
+    t.matches("string failure", string_notifications[1].message)
+
+    local table_notifications = run({ kind = "api_error", message = "table failure" })
+    t.equal(1, #table_notifications)
+    t.equal(WARN, table_notifications[1].level)
+    t.matches("table failure", table_notifications[1].message)
+  end)
+
+  t.test("ask tells the user to update a pinned session that disappeared", function()
+    local context = make_context()
+    local clear_called = false
+    local notifications = {}
+
+    with_options({ save = true, session = "ses_pinned" }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return context
+        end },
+        { ui, "prompt", function(_, on_submit)
+          on_submit("Why?")
+        end },
+        { selection, "save", function()
+          return true
+        end },
+        { sessions, "resolve", function(_, callback)
+          callback(nil, { id = "ses_pinned" })
+        end },
+        { client, "send", function(_, _, _, callback)
+          callback({ kind = "session_not_found", message = "Session not found: ses_pinned" })
+        end },
+        { sessions, "clear", function()
+          clear_called = true
+          return true
+        end },
+        { vim, "notify", notification_stub(notifications) },
+      }, function()
+        local ok, err = pcall(init.ask, {})
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.equal(false, clear_called, "a pinned session must not clear the stored state")
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("config%.session", notifications[1].message)
+  end)
+
+  t.test("ask clears the stored session when a stored session disappeared", function()
+    local context = make_context()
+    local clear_root
+    local notifications = {}
+
+    with_options({ save = true, session = nil }, function()
+      with_stubs({
+        { selection, "capture", function()
+          return context
+        end },
+        { ui, "prompt", function(_, on_submit)
+          on_submit("Why?")
+        end },
+        { selection, "save", function()
+          return true
+        end },
+        { sessions, "resolve", function(_, callback)
+          callback(nil, { id = "ses_missing", title = "Stored" })
+        end },
+        { client, "send", function(_, _, _, callback)
+          callback({ kind = "session_not_found", message = "Session not found: ses_missing" })
+        end },
+        { sessions, "clear", function(root)
+          clear_root = root
+          return true
+        end },
+        { vim, "notify", notification_stub(notifications) },
+      }, function()
+        local ok, err = pcall(init.ask, {})
+        t.assert(ok, "ask should not throw: " .. tostring(err))
+      end)
+    end)
+
+    t.equal(context.project_root, clear_root, "clear should receive the project root")
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches(":OpencodeSession", notifications[1].message)
+  end)
+
+  t.test("select_session chooses a session for the current project", function()
+    local root_arg
+    local notifications = {}
+
+    with_stubs({
+      { selection, "project_root", function(target)
+        root_arg = target
+        return "/tmp/project"
+      end },
+      { sessions, "choose", function(root, callback)
+        t.equal("/tmp/project", root)
+        callback(nil, { id = "ses_chosen", title = "Chosen session" })
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.select_session)
+      t.assert(ok, "select_session should not throw: " .. tostring(err))
+    end)
+
+    t.equal(0, root_arg, "select_session should resolve the current buffer's project")
+    t.equal(1, #notifications)
+    t.equal(INFO, notifications[1].level)
+    t.matches("Chosen session", notifications[1].message)
+  end)
+
+  t.test("select_session notifies picker errors and ignores cancellation", function()
+    local notifications = {}
+
+    with_stubs({
+      { selection, "project_root", function()
+        return "/tmp/project"
+      end },
+      { sessions, "choose", function(_, callback)
+        callback("opencode-ask: no sessions found")
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.select_session)
+      t.assert(ok, "select_session should not throw: " .. tostring(err))
+    end)
+
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("no sessions found", notifications[1].message)
+
+    notifications = {}
+    with_stubs({
+      { selection, "project_root", function()
+        return "/tmp/project"
+      end },
+      { sessions, "choose", function() end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.select_session)
+      t.assert(ok, "select_session should not throw: " .. tostring(err))
+    end)
+
+    t.equal(0, #notifications, "picker cancellation should be a no-op")
+  end)
+
+  t.test("clear_session clears the current project's stored session", function()
+    local root_arg
+    local notifications = {}
+
+    with_stubs({
+      { selection, "project_root", function(target)
+        root_arg = target
+        return "/tmp/project"
+      end },
+      { sessions, "clear", function(root)
+        t.equal("/tmp/project", root)
+        return true
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.clear_session)
+      t.assert(ok, "clear_session should not throw: " .. tostring(err))
+    end)
+
+    t.equal(0, root_arg)
+    t.equal(1, #notifications)
+    t.equal(INFO, notifications[1].level)
+    t.matches("Cleared", notifications[1].message)
+  end)
+
+  t.test("clear_session notifies clear errors", function()
+    local notifications = {}
+
+    with_stubs({
+      { selection, "project_root", function()
+        return "/tmp/project"
+      end },
+      { sessions, "clear", function()
+        return nil, "opencode-ask: clear failed"
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.clear_session)
+      t.assert(ok, "clear_session should not throw: " .. tostring(err))
+    end)
+
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("clear failed", notifications[1].message)
+  end)
+
+  t.test("ask leaves visual mode before opening the prompt", function()
+    local context = make_context()
+
+    local function run(mode)
+      local order = {}
+
+      with_options({ save = true }, function()
+        with_stubs({
+          { selection, "capture", function()
+            return context
+          end },
+          { vim.fn, "mode", function()
+            return mode
+          end },
+          { vim.api, "nvim_feedkeys", function(keys, flags)
+            order[#order + 1] = { kind = "keys", keys = keys, flags = flags }
+          end },
+          { ui, "prompt", function()
+            order[#order + 1] = { kind = "prompt" }
+          end },
+          { vim, "notify", function() end },
+        }, function()
+          local ok, err = pcall(init.ask, {})
+          t.assert(ok, "ask should not throw: " .. tostring(err))
+        end)
+      end)
+
+      return order
+    end
+
+    local visual = run("V")
+    t.equal(2, #visual)
+    t.equal("keys", visual[1].kind)
+    t.equal("\27", visual[1].keys, "visual mode should be left with <Esc>")
+    t.equal("nx", visual[1].flags)
+    t.equal("prompt", visual[2].kind)
+
+    local normal = run("n")
+    t.equal(1, #normal, "normal mode should not feed an extra <Esc>")
+    t.equal("prompt", normal[1].kind)
+  end)
+
+  t.test("setup installs an x-mode keymap only", function()
+    local key = "<leader>oq"
+    delete_mapping("x", key)
+    delete_mapping("s", key)
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        local options = init.setup({ keymap = key, state_path = vim.fn.tempname() })
+        t.equal(key, options.keymap)
+        t.assert(vim.fn.maparg(key, "x") ~= "", "the visual-mode mapping should exist")
+        t.equal("", vim.fn.maparg(key, "s"), "no select-mode mapping should be installed")
+
+        local mapping = vim.fn.maparg(key, "x", false, true)
+        t.equal("Ask OpenCode about the visual selection", mapping.desc)
+      end)
+    end)
+
+    delete_mapping("x", key)
+    delete_mapping("s", key)
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("setup honors a custom keymap", function()
+    local default_key = "<leader>oq"
+    local custom_key = "<leader>ot"
+    delete_mapping("x", default_key)
+    delete_mapping("x", custom_key)
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        init.setup({ keymap = custom_key, state_path = vim.fn.tempname() })
+        t.assert(vim.fn.maparg(custom_key, "x") ~= "", "the custom mapping should exist")
+        t.equal("", vim.fn.maparg(default_key, "x"), "the default mapping should not be installed")
+      end)
+    end)
+
+    delete_mapping("x", default_key)
+    delete_mapping("x", custom_key)
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("setup installs nothing when the keymap is false", function()
+    local key = "<leader>oq"
+    delete_mapping("x", key)
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        local options = init.setup({ keymap = false, state_path = vim.fn.tempname() })
+        t.equal(false, options.keymap)
+        t.equal("", vim.fn.maparg(key, "x"), "no mapping should be installed")
+      end)
+    end)
+
+    delete_mapping("x", key)
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("plugin file registers commands with range and callbacks", function()
+    local names = { "OpencodeAsk", "OpencodeSession", "OpencodeSessionClear" }
+    local saved_loaded = vim.g.loaded_opencode_ask
+    for _, name in ipairs(names) do
+      pcall(vim.api.nvim_del_user_command, name)
+    end
+    vim.g.loaded_opencode_ask = nil
+
+    local buffer = vim.api.nvim_create_buf(true, false)
+    local calls = {}
+
+    local function command_exists(name)
+      return vim.api.nvim_get_commands({ builtin = false })[name] ~= nil
+    end
+
+    local ok, err = pcall(function()
+      with_stubs({
+        { init, "ask", function(opts)
+          calls.ask = opts
+        end },
+        { init, "select_session", function()
+          calls.select = (calls.select or 0) + 1
+        end },
+        { init, "clear_session", function()
+          calls.clear = (calls.clear or 0) + 1
+        end },
+      }, function()
+        local loaded, load_err = pcall(dofile, plugin_path)
+        t.assert(loaded, "plugin file should load: " .. tostring(load_err))
+
+        for _, name in ipairs(names) do
+          t.assert(command_exists(name), name .. " should be registered")
+        end
+
+        local commands = vim.api.nvim_get_commands({ builtin = false })
+        t.equal(".", commands.OpencodeAsk.range, "OpencodeAsk should accept a range")
+        t.equal("0", commands.OpencodeAsk.nargs)
+        t.equal("0", commands.OpencodeSession.nargs)
+        t.equal("0", commands.OpencodeSessionClear.nargs)
+
+        vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "one", "two", "three", "four", "five" })
+        vim.api.nvim_set_current_buf(buffer)
+
+        vim.cmd("2,4OpencodeAsk")
+        t.equal({ first = 2, last = 4 }, calls.ask)
+
+        vim.api.nvim_win_set_cursor(0, { 3, 0 })
+        vim.cmd("OpencodeAsk")
+        t.equal({ first = 3, last = 3 }, calls.ask, "without a range the current line is used")
+
+        vim.cmd("OpencodeSession")
+        t.equal(1, calls.select)
+        vim.cmd("OpencodeSessionClear")
+        t.equal(1, calls.clear)
+
+        -- The loaded guard prevents re-sourcing from recreating commands.
+        vim.api.nvim_del_user_command("OpencodeSession")
+        local reloaded, reload_err = pcall(dofile, plugin_path)
+        t.assert(reloaded, "loading the guarded plugin again should not throw: " .. tostring(reload_err))
+        t.equal(false, command_exists("OpencodeSession"), "the loaded guard should skip re-registration")
+      end)
+    end)
+
+    pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+    for _, name in ipairs(names) do
+      pcall(vim.api.nvim_del_user_command, name)
+    end
+    vim.g.loaded_opencode_ask = saved_loaded
+    if not ok then
+      error(err, 0)
+    end
+  end)
+end
