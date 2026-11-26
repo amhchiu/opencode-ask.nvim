@@ -4,6 +4,8 @@ local selection = require("opencode_ask.selection")
 
 local UNKNOWN_DATE = "unknown date"
 
+M.CREATE_SESSION_LABEL = "Create new session…"
+
 local function error_message(message)
   return "opencode-ask: " .. message
 end
@@ -252,6 +254,28 @@ local function store_session(cwd, session)
   return M.write_state(state)
 end
 
+--- Create a session for the project, persist it, and return it.
+--- Calls callback(err, session) exactly once from the main loop.
+function M.create(cwd, title, callback)
+  cwd = cwd or vim.fn.getcwd()
+  local done = once(type(callback) == "function" and callback or function() end)
+  local root = project_key(cwd)
+
+  require("opencode_ask.client").create_session(root, title, function(err, session)
+    if err then
+      done(err)
+      return
+    end
+
+    local stored, write_err = store_session(root, session)
+    if not stored then
+      vim.notify(write_err, vim.log.levels.WARN)
+    end
+
+    done(nil, session)
+  end)
+end
+
 --- Pick a session for the project and persist it.
 --- Cancelling the picker is a clean no-op; the callback is not called.
 function M.choose(cwd, callback)
@@ -264,22 +288,15 @@ function M.choose(cwd, callback)
       return
     end
 
-    if type(sessions) ~= "table" or #sessions == 0 then
-      done(
-        error_message(
-          ("No OpenCode sessions found for %s. Start a session in the OpenCode TUI, then run :OpencodeSession."):format(
-            cwd
-          )
-        )
-      )
-      return
+    if type(sessions) ~= "table" then
+      sessions = {}
     end
 
     local items = {}
     local by_label = {}
     for _, session in ipairs(sessions) do
       local label = M.label(session)
-      if by_label[label] then
+      if by_label[label] or label == M.CREATE_SESSION_LABEL then
         local suffix = 2
         while by_label[label .. " (" .. suffix .. ")"] do
           suffix = suffix + 1
@@ -312,12 +329,36 @@ function M.choose(cwd, callback)
       local ok, fzf = pcall(require, "fzf-lua")
       if ok and type(fzf) == "table" and type(fzf.fzf_exec) == "function" then
         local shown = pcall(fzf.fzf_exec, items, {
-          prompt = "OpenCode sessions> ",
+          prompt = "OpenCode sessions (type a title; Enter creates when no match)> ",
+          fzf_opts = { ["--no-multi"] = true },
           actions = {
-            ["enter"] = function(chosen)
-              local label = chosen and chosen[1]
+            ["enter"] = function(chosen, action_opts)
               vim.schedule(function()
-                selected(label)
+                if type(chosen) == "table" and #chosen > 0 then
+                  selected(chosen[1])
+                  return
+                end
+
+                local query = type(action_opts) == "table"
+                    and type(action_opts.last_query) == "string"
+                    and vim.trim(action_opts.last_query)
+                  or ""
+
+                if query == "" then
+                  vim.notify(
+                    "opencode-ask: type a session title and press Enter to create one",
+                    vim.log.levels.WARN
+                  )
+                  return
+                end
+
+                M.create(cwd, query, function(create_err, session)
+                  if create_err then
+                    done(create_err)
+                  else
+                    done(nil, session)
+                  end
+                end)
               end)
             end,
           },
@@ -328,7 +369,26 @@ function M.choose(cwd, callback)
       end
     end
 
+    items[#items + 1] = M.CREATE_SESSION_LABEL
     vim.ui.select(items, { prompt = "OpenCode sessions" }, function(choice)
+      if choice == M.CREATE_SESSION_LABEL then
+        vim.ui.input({ prompt = "New OpenCode session title: " }, function(input)
+          local title = type(input) == "string" and vim.trim(input) or ""
+          if title == "" then
+            return
+          end
+
+          M.create(cwd, title, function(create_err, session)
+            if create_err then
+              done(create_err)
+            else
+              done(nil, session)
+            end
+          end)
+        end)
+        return
+      end
+
       selected(choice)
     end)
   end)

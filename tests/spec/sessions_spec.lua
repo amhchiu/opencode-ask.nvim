@@ -382,31 +382,39 @@ return function(t)
 
         local select_calls = 0
         local selected_items
+        local create_calls = 0
+        local client = require("opencode_ask.client")
 
-        with_stub(sessions, "list", function(cwd, callback)
-          t.equal(project, cwd)
-          callback(nil, listed)
+        with_stub(client, "create_session", function()
+          create_calls = create_calls + 1
         end, function()
-          with_stub(vim.ui, "select", function(items, opts, callback)
-            select_calls = select_calls + 1
-            selected_items = items
-            t.equal("OpenCode sessions", opts.prompt)
-            callback(items[1])
+          with_stub(sessions, "list", function(cwd, callback)
+            t.equal(project, cwd)
+            callback(nil, listed)
           end, function()
-            local calls = 0
-            local got_err, got
+            with_stub(vim.ui, "select", function(items, opts, callback)
+              select_calls = select_calls + 1
+              selected_items = items
+              t.equal("OpenCode sessions", opts.prompt)
+              callback(items[1])
+            end, function()
+              local calls = 0
+              local got_err, got
 
-            sessions.choose(project, function(err, session)
-              calls = calls + 1
-              got_err = err
-              got = session
+              sessions.choose(project, function(err, session)
+                calls = calls + 1
+                got_err = err
+                got = session
+              end)
+
+              t.equal(1, select_calls, "the picker should be shown once")
+              t.equal(3, #selected_items, "both sessions and the create entry should be offered")
+              t.equal(sessions.CREATE_SESSION_LABEL, selected_items[3])
+              t.equal(1, calls, "the callback should run once")
+              t.equal(nil, got_err)
+              t.equal(chosen, got)
+              t.equal(0, create_calls, "selecting an existing session must not create")
             end)
-
-            t.equal(1, select_calls, "the picker should be shown once")
-            t.equal(2, #selected_items, "both sessions should be offered")
-            t.equal(1, calls, "the callback should run once")
-            t.equal(nil, got_err)
-            t.equal(chosen, got)
           end)
         end)
 
@@ -417,6 +425,448 @@ return function(t)
         t.equal(project, stored.directory)
         t.equal(1794403014216, stored.updated)
         t.equal("ses_preserved", state.projects[project_root(other)].id, "other projects should be preserved")
+        t.equal(0, create_calls, "selecting an existing session must not create")
+      end)
+    end)
+  end)
+
+  t.test("choose creates a session from an unmatched fzf-lua query", function()
+    with_temp(function(dir)
+      local path = state_file(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+
+      local client = require("opencode_ask.client")
+      local created = {
+        id = "ses_created",
+        title = "New session",
+        directory = project,
+        updated = 1794403014222,
+      }
+      local captured = {}
+      local creation = {}
+      local loaded_fzf = package.loaded["fzf-lua"]
+
+      with_options({ state_path = path, picker = "fzf-lua" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, {
+            { id = "ses_existing", title = "Existing session", directory = project, updated = 1794403014216 },
+          })
+        end, function()
+          with_stub(package.loaded, "fzf-lua", {
+            fzf_exec = function(items, opts)
+              captured.items = items
+              captured.opts = opts
+            end,
+          }, function()
+            with_stub(client, "create_session", function(cwd, title, callback)
+              creation.cwd = cwd
+              creation.title = title
+              callback(nil, created)
+            end, function()
+              local calls = 0
+              local got_err, got
+
+              sessions.choose(project, function(err, session)
+                calls = calls + 1
+                got_err = err
+                got = session
+              end)
+
+              t.assert(captured.items, "fzf_exec should be called")
+              t.equal(
+                false,
+                vim.tbl_contains(captured.items, sessions.CREATE_SESSION_LABEL),
+                "the create label must not be an fzf-lua item"
+              )
+              t.equal(true, captured.opts.fzf_opts["--no-multi"], "multi-select should be disabled")
+              t.matches("type a title", captured.opts.prompt)
+              t.equal(0, calls, "the callback must wait for Enter")
+
+              captured.opts.actions.enter({}, { last_query = "New session" })
+              t.assert(vim.wait(2000, function()
+                return calls > 0
+              end), "the choose callback should run")
+
+              t.equal(1, calls, "the callback should run once")
+              t.equal(nil, got_err)
+              t.equal(created, got)
+              t.equal(project_root(project), creation.cwd, "creation should use the normalized project root")
+              t.equal("New session", creation.title, "creation should use the typed query")
+            end)
+          end)
+        end)
+
+        t.equal(loaded_fzf, package.loaded["fzf-lua"], "the fzf-lua stub should be removed")
+
+        t.equal({
+          id = "ses_created",
+          title = "New session",
+          directory = project,
+          updated = 1794403014222,
+        }, sessions.read_state().projects[project_root(project)])
+        t.equal({}, no_temp_files(path))
+      end)
+    end)
+  end)
+
+  t.test("choose stores an existing fzf-lua selection without creating", function()
+    with_temp(function(dir)
+      local path = state_file(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+      local chosen = {
+        id = "ses_existing",
+        title = "Existing session",
+        directory = project,
+        updated = 1794403014216,
+      }
+      local captured = {}
+      local create_calls = 0
+      local client = require("opencode_ask.client")
+
+      with_options({ state_path = path, picker = "fzf-lua" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, { chosen })
+        end, function()
+          with_stub(package.loaded, "fzf-lua", {
+            fzf_exec = function(items, opts)
+              captured.items = items
+              captured.opts = opts
+            end,
+          }, function()
+            with_stub(client, "create_session", function()
+              create_calls = create_calls + 1
+            end, function()
+              local calls = 0
+              local got_err, got
+
+              sessions.choose(project, function(err, session)
+                calls = calls + 1
+                got_err = err
+                got = session
+              end)
+
+              captured.opts.actions.enter({ captured.items[1] }, { last_query = "Different title" })
+              t.assert(vim.wait(2000, function()
+                return calls > 0
+              end), "the choose callback should run")
+
+              t.equal(1, calls, "the callback should run once")
+              t.equal(nil, got_err)
+              t.equal(chosen, got)
+              t.equal(0, create_calls, "selecting an existing session must not create")
+            end)
+          end)
+        end)
+
+        t.equal("ses_existing", sessions.read_state().projects[project_root(project)].id)
+      end)
+    end)
+  end)
+
+  t.test("choose ignores an unknown fzf-lua selection without creating", function()
+    with_temp(function(dir)
+      local path = state_file(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+      local captured = {}
+      local create_calls = 0
+      local client = require("opencode_ask.client")
+
+      with_options({ state_path = path, picker = "fzf-lua" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, { { id = "ses_existing", title = "Existing session" } })
+        end, function()
+          with_stub(package.loaded, "fzf-lua", {
+            fzf_exec = function(items, opts)
+              captured.items = items
+              captured.opts = opts
+            end,
+          }, function()
+            with_stub(client, "create_session", function()
+              create_calls = create_calls + 1
+            end, function()
+              local calls = 0
+              sessions.choose(project, function()
+                calls = calls + 1
+              end)
+
+              captured.opts.actions.enter({ "missing session label" }, { last_query = "New session" })
+              vim.wait(100)
+
+              t.equal(0, calls, "an unknown label must not call the callback")
+              t.equal(0, create_calls, "an unknown label must not create a session")
+            end)
+          end)
+        end)
+
+        t.equal(nil, vim.uv.fs_stat(path), "an unknown label must not store a session")
+      end)
+    end)
+  end)
+
+  t.test("choose warns and does not create for an empty fzf-lua query", function()
+    with_temp(function(dir)
+      local path = state_file(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+      local captured = {}
+      local warns = {}
+      local create_calls = 0
+      local client = require("opencode_ask.client")
+
+      with_options({ state_path = path, picker = "fzf-lua" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, { { id = "ses_existing", title = "Existing session" } })
+        end, function()
+          with_stub(package.loaded, "fzf-lua", {
+            fzf_exec = function(items, opts)
+              captured.items = items
+              captured.opts = opts
+            end,
+          }, function()
+            with_stub(client, "create_session", function()
+              create_calls = create_calls + 1
+            end, function()
+              with_stub(vim, "notify", function(message, level)
+                warns[#warns + 1] = { message = message, level = level }
+              end, function()
+                local calls = 0
+                sessions.choose(project, function()
+                  calls = calls + 1
+                end)
+
+                captured.opts.actions.enter({}, { last_query = "   " })
+                t.assert(vim.wait(2000, function()
+                  return #warns > 0
+                end), "the whitespace query should warn")
+
+                captured.opts.actions.enter({}, nil)
+                t.assert(vim.wait(2000, function()
+                  return #warns > 1
+                end), "the missing action options should warn")
+
+                t.equal(2, #warns)
+                for _, warning in ipairs(warns) do
+                  t.matches("type a session title", warning.message)
+                  t.equal(vim.log.levels.WARN, warning.level)
+                end
+                t.equal(0, calls, "an empty query must not call the callback")
+                t.equal(0, create_calls, "an empty query must not create a session")
+              end)
+            end)
+          end)
+        end)
+
+        t.equal(nil, vim.uv.fs_stat(path), "an empty query must not store a session")
+      end)
+    end)
+  end)
+
+  t.test("choose fallback creates and stores a session from the create entry", function()
+    with_temp(function(dir)
+      local path = state_file(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+      local client = require("opencode_ask.client")
+      local created = {
+        id = "ses_fallback",
+        title = "Fallback session",
+        directory = project,
+        updated = 1794403014233,
+      }
+      local creation = {}
+
+      with_options({ state_path = path, picker = "none" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, {})
+        end, function()
+          with_stub(vim.ui, "select", function(items, opts, callback)
+            t.equal("OpenCode sessions", opts.prompt)
+            t.equal({ sessions.CREATE_SESSION_LABEL }, items)
+            callback(items[1])
+          end, function()
+            with_stub(vim.ui, "input", function(opts, callback)
+              t.equal("New OpenCode session title: ", opts.prompt)
+              callback("  Fallback session  ")
+            end, function()
+              with_stub(client, "create_session", function(cwd, title, callback)
+                creation.cwd = cwd
+                creation.title = title
+                callback(nil, created)
+              end, function()
+                local calls = 0
+                local got_err, got
+
+                sessions.choose(project, function(err, session)
+                  calls = calls + 1
+                  got_err = err
+                  got = session
+                end)
+
+                t.equal(1, calls, "the callback should run once")
+                t.equal(nil, got_err)
+                t.equal(created, got)
+                t.equal(project_root(project), creation.cwd, "creation should use the normalized project root")
+                t.equal("Fallback session", creation.title, "the input title should be trimmed")
+              end)
+            end)
+          end)
+        end)
+
+        t.equal({
+          id = "ses_fallback",
+          title = "Fallback session",
+          directory = project,
+          updated = 1794403014233,
+        }, sessions.read_state().projects[project_root(project)])
+        t.equal({}, no_temp_files(path))
+      end)
+    end)
+  end)
+
+  t.test("choose fallback cancelling or blank titles create nothing", function()
+    with_temp(function(dir)
+      local path = state_file(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+      local client = require("opencode_ask.client")
+      local create_calls = 0
+
+      with_options({ state_path = path, picker = "none" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, {})
+        end, function()
+          with_stub(client, "create_session", function()
+            create_calls = create_calls + 1
+          end, function()
+            local function expect_cancel(input)
+              with_stub(vim.ui, "select", function(_, _, callback)
+                callback(sessions.CREATE_SESSION_LABEL)
+              end, function()
+                with_stub(vim.ui, "input", function(_, callback)
+                  callback(input)
+                end, function()
+                  local calls = 0
+                  sessions.choose(project, function()
+                    calls = calls + 1
+                  end)
+
+                  t.equal(0, calls, "cancelling the title input must not call the callback")
+                end)
+              end)
+            end
+
+            expect_cancel(nil)
+            expect_cancel("")
+            expect_cancel("   ")
+          end)
+        end)
+
+        t.equal(0, create_calls, "cancelling the title input must not create a session")
+        t.equal(nil, vim.uv.fs_stat(path), "cancelling the title input must not store a session")
+      end)
+    end)
+  end)
+
+  t.test("choose returns creation errors and stores nothing", function()
+    with_temp(function(dir)
+      local path = state_file(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+      local client = require("opencode_ask.client")
+
+      with_options({ state_path = path, picker = "none" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, {})
+        end, function()
+          with_stub(vim.ui, "select", function(_, _, callback)
+            callback(sessions.CREATE_SESSION_LABEL)
+          end, function()
+            with_stub(vim.ui, "input", function(_, callback)
+              callback("Failing session")
+            end, function()
+              with_stub(client, "create_session", function(_, _, callback)
+                callback("opencode-ask: creation failed")
+              end, function()
+                local calls = 0
+                local got_err, got
+
+                sessions.choose(project, function(err, session)
+                  calls = calls + 1
+                  got_err = err
+                  got = session
+                end)
+
+                t.equal(1, calls, "the callback should run once")
+                t.equal("opencode-ask: creation failed", got_err)
+                t.equal(nil, got)
+              end)
+            end)
+          end)
+        end)
+
+        t.equal(nil, vim.uv.fs_stat(path), "a failed creation must not store a session")
+      end)
+    end)
+  end)
+
+  t.test("choose returns a created session when state cannot be written", function()
+    with_temp(function(dir)
+      local project = vim.fs.joinpath(dir, "project")
+      vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
+      local blocker = vim.fs.joinpath(dir, "blocked")
+      vim.fn.writefile({ "a file, not a directory" }, blocker)
+      local path = vim.fs.joinpath(blocker, "sessions.json")
+      local client = require("opencode_ask.client")
+      local created = {
+        id = "ses_unwritten",
+        title = "Unsaved session",
+        directory = project,
+        updated = 1794403014244,
+      }
+      local warns = {}
+
+      with_options({ state_path = path, picker = "none" }, function()
+        with_stub(sessions, "list", function(_, callback)
+          callback(nil, {})
+        end, function()
+          with_stub(vim.ui, "select", function(_, _, callback)
+            callback(sessions.CREATE_SESSION_LABEL)
+          end, function()
+            with_stub(vim.ui, "input", function(_, callback)
+              callback("Unsaved session")
+            end, function()
+              with_stub(client, "create_session", function(_, _, callback)
+                callback(nil, created)
+              end, function()
+                with_stub(vim, "notify", function(message, level)
+                  warns[#warns + 1] = { message = message, level = level }
+                end, function()
+                  local calls = 0
+                  local got_err, got
+
+                  sessions.choose(project, function(err, session)
+                    calls = calls + 1
+                    got_err = err
+                    got = session
+                  end)
+
+                  t.equal(1, calls, "the callback should run once")
+                  t.equal(nil, got_err)
+                  t.equal(created, got, "the created session should still be returned")
+                end)
+              end)
+            end)
+          end)
+        end)
+
+        t.equal(1, #warns, "the write failure should warn")
+        t.matches("could not write session state", warns[1].message)
+        t.equal(vim.log.levels.WARN, warns[1].level)
+        t.equal(nil, vim.uv.fs_stat(path), "the failed write must not create a state file")
+        t.equal({}, no_temp_files(path))
       end)
     end)
   end)
@@ -453,7 +903,7 @@ return function(t)
     end)
   end)
 
-  t.test("choose reports an actionable error when no sessions exist", function()
+  t.test("choose opens the picker with only the create label for an empty list", function()
     with_temp(function(dir)
       local path = state_file(dir)
       local project = vim.fs.joinpath(dir, "project")
@@ -464,22 +914,19 @@ return function(t)
           callback(nil, {})
         end, function()
           local picker_calls = 0
-          with_stub(vim.ui, "select", function()
+          local selected_items
+          with_stub(vim.ui, "select", function(items)
             picker_calls = picker_calls + 1
+            selected_items = items
           end, function()
             local calls = 0
-            local got_err
-
-            sessions.choose(project, function(err)
+            sessions.choose(project, function()
               calls = calls + 1
-              got_err = err
             end)
 
-            t.equal(1, calls, "the callback should run once")
-            t.equal(0, picker_calls, "the picker should not open for an empty list")
-            t.matches("No OpenCode sessions found", got_err)
-            t.assert(got_err:find(project, 1, true), "the error should name the directory")
-            t.matches(":OpencodeSession", got_err)
+            t.equal(1, picker_calls, "the picker should open for an empty list")
+            t.equal({ sessions.CREATE_SESSION_LABEL }, selected_items)
+            t.equal(0, calls, "no choice means no callback")
           end)
         end)
 
