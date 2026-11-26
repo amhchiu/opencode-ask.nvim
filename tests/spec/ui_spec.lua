@@ -1,13 +1,34 @@
 local ui = require("opencode_ask.ui")
 
 return function(t)
+  local function find_float()
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_config(win).relative ~= "" then
+        return win
+      end
+    end
+    return nil
+  end
+
+  local function close_float(win)
+    if win and vim.api.nvim_win_is_valid(win) then
+      pcall(vim.cmd, "stopinsert")
+      local buf = vim.api.nvim_win_get_buf(win)
+      pcall(vim.api.nvim_win_close, win, true)
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+    end
+  end
+
   t.test("layout uses centered defaults", function()
     local layout = ui._layout({}, { columns = 120, lines = 30 })
 
     t.equal(80, layout.width)
     t.equal(4, layout.height)
-    t.equal(20, layout.col)
-    t.equal(13, layout.row)
+    t.equal(19, layout.col)
+    t.equal(12, layout.row)
+    t.equal("rounded", layout.border)
     t.equal("Ask OpenCode", layout.title)
   end)
 
@@ -16,8 +37,8 @@ return function(t)
 
     t.equal(30, layout.width)
     t.equal(8, layout.height)
-    t.equal(35, layout.col)
-    t.equal(11, layout.row)
+    t.equal(34, layout.col)
+    t.equal(10, layout.row)
   end)
 
   t.test("layout clamps the float including its border to the editor width", function()
@@ -45,6 +66,132 @@ return function(t)
 
     t.equal(90, layout.width)
     t.assert(layout.width + 2 <= 100, "border exceeded the editor width")
+  end)
+
+  t.test("layout places the float above a selection with room above", function()
+    local layout = ui._layout({
+      position = "selection",
+      anchor = { top_row = 12, bottom_row = 15, win_col = 20, win_width = 50 },
+    }, { columns = 100, lines = 30 })
+
+    t.equal(80, layout.width)
+    t.equal(4, layout.height)
+    t.equal(6, layout.row)
+    t.equal(4, layout.col)
+  end)
+
+  t.test("layout places the float below a selection near the top", function()
+    local layout = ui._layout({
+      position = "selection",
+      anchor = { top_row = 1, bottom_row = 4, win_col = 10, win_width = 60 },
+    }, { columns = 100, lines = 30, cmdheight = 1 })
+
+    t.equal(4, layout.row)
+  end)
+
+  t.test("layout centers the float when the selection fills the screen", function()
+    local layout = ui._layout({
+      position = "selection",
+      anchor = { top_row = 1, bottom_row = 9, win_col = 0, win_width = 100 },
+    }, { columns = 100, lines = 10, cmdheight = 1 })
+
+    t.equal(2, layout.row)
+    t.assert(layout.row >= 0, "row must not be negative")
+    t.assert(layout.row + layout.height + 2 <= 10, "float exceeded the editor height")
+  end)
+
+  t.test("layout center position ignores the selection anchor", function()
+    local layout = ui._layout({
+      position = "center",
+      anchor = { top_row = 12, bottom_row = 15, win_col = 30, win_width = 20 },
+    }, { columns = 100, lines = 30 })
+
+    t.equal(9, layout.col)
+    t.equal(12, layout.row)
+  end)
+
+  t.test("layout border none does not reserve border cells", function()
+    local dimensions = { columns = 12, lines = 7, cmdheight = 1 }
+    local rounded = ui._layout({ width = 5, height = 10, border = "rounded" }, dimensions)
+    local none = ui._layout({ width = 5, height = 10, border = "none" }, dimensions)
+
+    t.equal(10, rounded.width)
+    t.equal(12, none.width)
+    t.equal(1, rounded.height)
+    t.equal(3, none.height)
+    t.equal("none", none.border)
+    t.assert(none.width > rounded.width, "border none should use more columns")
+    t.assert(none.height > rounded.height, "border none should use more rows")
+  end)
+
+  t.test("layout shadow border reserves one row and column", function()
+    local dimensions = { columns = 20, lines = 8, cmdheight = 1 }
+    local none = ui._layout({ width = 5, height = 10, border = "none" }, dimensions)
+    local shadow = ui._layout({ width = 5, height = 10, border = "shadow" }, dimensions)
+    local rounded = ui._layout({ width = 5, height = 10, border = "rounded" }, dimensions)
+
+    t.equal(20, none.width)
+    t.equal(19, shadow.width)
+    t.equal(18, rounded.width)
+    t.equal(4, none.height)
+    t.equal(3, shadow.height)
+    t.equal(2, rounded.height)
+    t.equal("shadow", shadow.border)
+  end)
+
+  t.test("layout centers horizontally inside a split window", function()
+    local layout = ui._layout({
+      position = "selection",
+      width = 20,
+      height = 2,
+      border = "none",
+      anchor = { top_row = 10, bottom_row = 12, win_col = 10, win_width = 40 },
+    }, { columns = 100, lines = 30, cmdheight = 1 })
+
+    t.equal(20, layout.col)
+    t.equal(8, layout.row)
+  end)
+
+  t.test("layout clamps horizontal alignment inside the editor", function()
+    local layout = ui._layout({
+      position = "selection",
+      width = 20,
+      height = 2,
+      border = "none",
+      anchor = { top_row = 10, bottom_row = 12, win_col = 30, win_width = 15 },
+    }, { columns = 40, lines = 30, cmdheight = 1 })
+
+    t.equal(20, layout.col)
+  end)
+
+  t.test("measure_anchor uses the bottom of a wrapped last line", function()
+    local win = vim.api.nvim_get_current_win()
+    local original_buf = vim.api.nvim_win_get_buf(win)
+    local original_wrap = vim.wo[win].wrap
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "first",
+      string.rep("x", 200),
+      "third",
+    })
+    vim.wo[win].wrap = true
+    vim.api.nvim_win_set_buf(win, buf)
+    vim.cmd("redraw")
+
+    local anchor = ui._measure_anchor(win, 1, 2)
+    local width = vim.api.nvim_win_get_width(win)
+
+    vim.api.nvim_win_set_buf(win, original_buf)
+    vim.wo[win].wrap = original_wrap
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    vim.cmd("redraw")
+
+    t.assert(anchor ~= nil, "anchor should be measured")
+    t.equal(0, anchor.top_row)
+    t.equal(4, anchor.bottom_row)
+    t.equal(0, anchor.win_col)
+    t.equal(width, anchor.win_width)
+    t.equal(nil, ui._measure_anchor(9999, 1, 1))
   end)
 
   t.test("layout keeps at least one row and stays in the editor", function()
@@ -117,6 +264,53 @@ return function(t)
     -- Restore the default link so later tests see the module's standard state.
     vim.api.nvim_set_hl(0, "OpencodeAskBorder", { link = "FloatBorder" })
     t.equal("FloatBorder", vim.api.nvim_get_hl(0, { name = "OpencodeAskBorder" }).link)
+  end)
+
+  t.test("prompt applies plugin styling and omits the title without a border", function()
+    local original_winblend = vim.o.winblend
+    vim.o.winblend = 25
+
+    local ok, err = pcall(ui.prompt, {
+      width = 20,
+      height = 2,
+      border = "none",
+      winblend = 0,
+    }, nil)
+    local win = find_float()
+    local config = win and vim.api.nvim_win_get_config(win) or {}
+    local winhighlight = win and vim.wo[win].winhighlight or nil
+    local winblend = win and vim.wo[win].winblend or nil
+
+    close_float(win)
+    vim.o.winblend = original_winblend
+
+    t.equal(true, ok, tostring(err))
+    t.assert(win ~= nil, "prompt should open a floating window")
+    t.equal("none", config.border)
+    t.equal(nil, config.title)
+    t.equal(nil, config.title_pos)
+    t.equal(
+      "NormalFloat:OpencodeAskNormal,FloatBorder:OpencodeAskBorder,FloatTitle:OpencodeAskTitle",
+      winhighlight
+    )
+    t.equal(0, winblend, "explicit winblend = 0 should override the global value")
+  end)
+
+  t.test("prompt applies an explicit non-zero winblend", function()
+    local ok, err = pcall(ui.prompt, {
+      width = 20,
+      height = 2,
+      border = "none",
+      winblend = 12,
+    }, nil)
+    local win = find_float()
+    local winblend = win and vim.wo[win].winblend or nil
+
+    close_float(win)
+
+    t.equal(true, ok, tostring(err))
+    t.assert(win ~= nil, "prompt should open a floating window")
+    t.equal(12, winblend)
   end)
 
   t.test("prompt cleans up when setup fails after opening", function()

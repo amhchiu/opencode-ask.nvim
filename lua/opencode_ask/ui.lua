@@ -4,7 +4,7 @@ local DEFAULT_TITLE = "Ask OpenCode"
 local DEFAULT_WIDTH = 80
 local DEFAULT_HEIGHT = 4
 local MIN_WIDTH = 20
-local BORDER_COLUMNS = 2
+local DEFAULT_BORDER = "rounded"
 
 local HIGHLIGHT_LINKS = {
   { "OpencodeAskNormal", "NormalFloat" },
@@ -48,7 +48,23 @@ function M._trim_question(text)
   return trimmed
 end
 
---- Compute the centered float geometry.
+--- Return the number of extra rows and columns a border occupies.
+local function border_size(border)
+  if border == "none" then
+    return 0, 0
+  end
+  if border == "shadow" then
+    return 1, 1
+  end
+  return 2, 2
+end
+
+--- Center `value` inside `span` cells.
+local function center(value, span)
+  return math.floor((span - value) / 2)
+end
+
+--- Compute the float geometry.
 ---
 --- This is an internal helper exported for tests. `dimensions` may override
 --- the current editor size so the clamping rules can be tested without
@@ -57,18 +73,58 @@ function M._layout(opts, dimensions)
   opts = opts or {}
   local columns = math.max(1, math.floor((dimensions and dimensions.columns) or vim.o.columns))
   local lines = math.max(1, math.floor((dimensions and dimensions.lines) or vim.o.lines))
+  local cmdheight = math.max(
+    0,
+    math.floor((dimensions and dimensions.cmdheight) or vim.o.cmdheight)
+  )
+
+  local border = opts.border or DEFAULT_BORDER
+  local border_rows, border_cols = border_size(border)
 
   local width
   if columns < MIN_WIDTH then
-    width = math.max(1, columns - BORDER_COLUMNS)
+    width = math.max(1, columns - border_cols)
   else
     width = math.max(MIN_WIDTH, math.min(opts.width or DEFAULT_WIDTH, columns - 10))
   end
-  -- Keep the content plus the rounded border inside the editor.
-  width = math.max(1, math.min(width, columns - BORDER_COLUMNS))
+  -- Keep the content plus its border inside the editor.
+  width = math.max(1, math.min(width, columns - border_cols))
 
-  local max_height = math.max(1, lines - 4)
+  local max_height = math.max(1, lines - 4 - border_rows)
   local height = math.max(1, math.min(opts.height or DEFAULT_HEIGHT, max_height))
+
+  local total_width = width + border_cols
+  local total_height = height + border_rows
+  local max_bottom = math.max(total_height, lines - cmdheight)
+
+  local anchor = opts.anchor
+  local position = opts.position or (anchor and "selection" or "center")
+  local use_anchor = position == "selection"
+    and type(anchor) == "table"
+    and anchor.top_row >= 0
+    and anchor.bottom_row > anchor.top_row
+
+  local row
+  if use_anchor then
+    if anchor.top_row >= total_height then
+      row = anchor.top_row - total_height
+    elseif max_bottom - anchor.bottom_row >= total_height then
+      row = anchor.bottom_row
+    else
+      row = center(total_height, lines)
+    end
+  else
+    row = center(total_height, lines)
+  end
+  row = math.max(0, math.min(row, math.max(0, lines - total_height)))
+
+  local col
+  if use_anchor and anchor.win_col ~= nil and anchor.win_width ~= nil then
+    col = anchor.win_col + center(total_width, anchor.win_width)
+  else
+    col = center(total_width, columns)
+  end
+  col = math.max(0, math.min(col, math.max(0, columns - total_width)))
 
   local title = opts.title or DEFAULT_TITLE
   if type(title) ~= "string" then
@@ -76,23 +132,66 @@ function M._layout(opts, dimensions)
   end
   title = truncate_title(title, width - 4)
 
-  local row = math.max(0, math.floor((lines - height) / 2))
-  local col = math.max(0, math.floor((columns - width) / 2))
-
   return {
     width = width,
     height = height,
     row = row,
     col = col,
+    border = border,
     title = title,
   }
 end
 
+--- Measure the on-screen rows covered by a line range in a window.
+---
+--- Returns nil when the window is invalid or the range is not visible. This is
+--- an internal helper exported for tests.
+function M._measure_anchor(win, first, last)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return nil
+  end
+
+  local ok, anchor = pcall(function()
+    local bufnr = vim.api.nvim_win_get_buf(win)
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    first = math.max(1, math.min(first, line_count))
+    last = math.max(1, math.min(last, line_count))
+    if first > last then
+      return nil
+    end
+
+    -- Measure the end of the last selected line so wrapped lines resolve to
+    -- their actual bottom screen row.
+    local last_line = vim.api.nvim_buf_get_lines(bufnr, last - 1, last, false)[1] or ""
+    local last_col = math.max(1, #last_line)
+
+    local top = vim.fn.screenpos(win, first, 1)
+    local bottom = vim.fn.screenpos(win, last, last_col)
+    if top.row <= 0 or bottom.row <= 0 then
+      return nil
+    end
+
+    local win_pos = vim.fn.win_screenpos(win)
+    return {
+      top_row = top.row - 1,
+      bottom_row = bottom.row,
+      win_col = win_pos[2] - 1,
+      win_width = vim.api.nvim_win_get_width(win),
+    }
+  end)
+
+  if not ok then
+    return nil
+  end
+  return anchor
+end
+
 --- Open a floating question prompt.
 ---
---- opts supports title, default, width, and height. on_submit is called with
---- the trimmed question after the float has closed. An empty question leaves
---- the prompt open and emits a warning notification.
+--- opts supports title, default, width, height, border, position, winblend, and
+--- anchor. on_submit is called with the trimmed question after the float has
+--- closed. An empty question leaves the prompt open and emits a warning
+--- notification.
 function M.prompt(opts, on_submit)
   M.ensure_highlights()
   opts = opts or {}
@@ -138,20 +237,29 @@ function M.prompt(opts, on_submit)
     vim.b[bufnr].completion = false
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, initial_lines)
 
-    win = vim.api.nvim_open_win(bufnr, true, {
+    local win_config = {
       relative = "editor",
       style = "minimal",
-      border = "rounded",
-      title = layout.title,
-      title_pos = "center",
+      border = layout.border,
       width = layout.width,
       height = layout.height,
       row = layout.row,
       col = layout.col,
-    })
+    }
+    if layout.border ~= "none" then
+      win_config.title = layout.title
+      win_config.title_pos = "center"
+    end
+
+    win = vim.api.nvim_open_win(bufnr, true, win_config)
 
     vim.wo[win].wrap = true
     vim.wo[win].linebreak = true
+    vim.wo[win].winhighlight =
+      "NormalFloat:OpencodeAskNormal,FloatBorder:OpencodeAskBorder,FloatTitle:OpencodeAskTitle"
+    if type(opts.winblend) == "number" then
+      vim.wo[win].winblend = opts.winblend
+    end
 
     local line_count = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_win_set_cursor(win, { line_count, 0 })
