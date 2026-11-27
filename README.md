@@ -206,7 +206,8 @@ a file attachment URI with the line range.
 Press `<leader>ot` or run `:OpencodeToggle` to open `opencode mini --session
 <id>` for the project's session. The viewer appears as a floating window by
 default, or as a right or bottom split when `viewer.layout` says so, and
-attaches to the same session so the answer appears there.
+attaches to the same session so the answer appears there. The window opens at
+the newest output, so the latest answer is visible without scrolling.
 
 Use it to read the answer and to approve OpenCode permission requests without
 leaving Neovim. Setting `viewer.auto_open = true` opens the viewer as soon as a

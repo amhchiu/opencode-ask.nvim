@@ -455,6 +455,41 @@ return function(t)
     end)
   end)
 
+  t.test("viewer opens at the newest output", function()
+    local env = new_env()
+    local notifications = {}
+
+    run_case({ layout = "float" }, terminal_stubs(env, notifications), function()
+      local root = "/tmp/viewer-project"
+      local session = { id = "ses_alpha" }
+
+      viewer.open_for_session(root, session)
+      local bufnr = current_buf()
+
+      local lines = {}
+      for index = 1, 80 do
+        lines[index] = "line " .. index
+      end
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+      viewer.hide(root)
+      viewer.open_for_session(root, session)
+      local win = vim.api.nvim_get_current_win()
+
+      local view = vim.api.nvim_win_call(win, function()
+        return {
+          top = vim.fn.line("w0"),
+          bottom = vim.fn.line("w$"),
+          cursor = vim.fn.line("."),
+        }
+      end)
+
+      t.equal(80, view.bottom, "the window should end at the newest line")
+      t.assert(view.top > 1, "the window should not start at the oldest line")
+      t.equal(80, view.cursor, "the cursor should be on the newest line")
+    end)
+  end)
+
   t.test("viewer focuses an already-open viewer without spawning", function()
     local env = new_env()
     local notifications = {}

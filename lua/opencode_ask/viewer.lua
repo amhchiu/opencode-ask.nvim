@@ -246,8 +246,25 @@ local function open_window(entry, viewer_opts, session, layout)
   return win
 end
 
+--- Move to the newest output so the window follows the answer as it streams.
+---
+--- Neovim does not follow terminal output in Terminal-Normal mode, so a viewer
+--- opened at line 1 would stay at the oldest scrollback. Jumping to the last
+--- line also makes the window follow later output.
+local function scroll_to_bottom(win)
+  if not valid_win(win) then
+    return
+  end
+
+  pcall(vim.api.nvim_win_call, win, function()
+    vim.cmd("normal! G")
+  end)
+end
+
 --- Enter the configured mode after the terminal buffer is active.
-local function apply_mode(viewer_opts)
+local function apply_mode(viewer_opts, win)
+  scroll_to_bottom(win)
+
   if viewer_opts.start_insert then
     vim.cmd("startinsert")
   else
@@ -419,7 +436,7 @@ function M.open_for_session(root, session)
       vim.api.nvim_win_get_tabpage(entry.win) == vim.api.nvim_get_current_tabpage()
     then
       vim.api.nvim_set_current_win(entry.win)
-      apply_mode(viewer_opts)
+      apply_mode(viewer_opts, entry.win)
       return
     end
 
@@ -438,7 +455,7 @@ function M.open_for_session(root, session)
     and is_job_alive(entry.job_id)
   then
     open_window(entry, viewer_opts, session, M._layout(viewer_opts, nil))
-    apply_mode(viewer_opts)
+    apply_mode(viewer_opts, entry.win)
     return
   end
 
@@ -479,7 +496,7 @@ function M.open_for_session(root, session)
   end
 
   entry.job_id = job_id
-  apply_mode(viewer_opts)
+  apply_mode(viewer_opts, entry.win)
 end
 
 --- Hide a project's viewer window while keeping its buffer and job alive.
