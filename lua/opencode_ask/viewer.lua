@@ -142,10 +142,26 @@ function M._layout(viewer_opts, dimensions)
   local total_width = width + border_cols
   local total_height = height + border_rows
 
-  local row = center(total_height, avail_lines)
+  local position = viewer_opts.position or "center"
+
+  local row
+  if position == "top" then
+    row = 0
+  elseif position == "bottom" then
+    row = avail_lines - total_height
+  else
+    row = center(total_height, avail_lines)
+  end
   row = math.max(0, math.min(row, math.max(0, avail_lines - total_height)))
 
-  local col = center(total_width, columns)
+  local col
+  if position == "left" then
+    col = 0
+  elseif position == "right" then
+    col = columns - total_width
+  else
+    col = center(total_width, columns)
+  end
   col = math.max(0, math.min(col, math.max(0, columns - total_width)))
 
   return {

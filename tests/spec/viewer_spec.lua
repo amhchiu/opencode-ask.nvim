@@ -215,6 +215,70 @@ return function(t)
     t.equal(8, layout.row)
   end)
 
+  t.test("viewer layout anchors the float to the configured edge", function()
+    local dimensions = { columns = 100, lines = 30, cmdheight = 1 }
+    local function layout(position)
+      return viewer._layout({
+        layout = "float",
+        position = position,
+        width = 0.8,
+        height = 0.8,
+        border = "rounded",
+      }, dimensions)
+    end
+
+    local top = layout("top")
+    t.equal(0, top.row, "top should sit on the first row")
+    t.equal(9, top.col, "top should stay horizontally centered")
+
+    local bottom = layout("bottom")
+    t.equal(4, bottom.row, "bottom should sit on the last available row")
+    t.equal(9, bottom.col, "bottom should stay horizontally centered")
+
+    local left = layout("left")
+    t.equal(2, left.row, "left should stay vertically centered")
+    t.equal(0, left.col, "left should sit on the first column")
+
+    local right = layout("right")
+    t.equal(2, right.row, "right should stay vertically centered")
+    t.equal(18, right.col, "right should sit on the last available column")
+  end)
+
+  t.test("viewer layout keeps anchored floats inside a tiny editor", function()
+    for _, position in ipairs({ "center", "top", "bottom", "left", "right" }) do
+      for _, columns in ipairs({ 1, 2, 3, 5 }) do
+        local layout = viewer._layout({
+          layout = "float",
+          position = position,
+          width = 1,
+          height = 1,
+          border = "rounded",
+        }, { columns = columns, lines = 2, cmdheight = 1 })
+
+        t.assert(layout.row >= 0, position .. " row must not be negative")
+        t.assert(layout.col >= 0, position .. " col must not be negative")
+      end
+    end
+  end)
+
+  t.test("viewer layout ignores position for split layouts", function()
+    local right = viewer._layout({
+      layout = "right",
+      position = "left",
+      width = 0.4,
+    }, { columns = 100, lines = 30, cmdheight = 1 })
+    local bottom = viewer._layout({
+      layout = "bottom",
+      position = "top",
+      height = 0.35,
+    }, { columns = 100, lines = 30, cmdheight = 1 })
+
+    t.equal("right", right.layout)
+    t.equal(40, right.width)
+    t.equal("bottom", bottom.layout)
+    t.equal(10, bottom.height)
+  end)
+
   t.test("viewer layout clamps width = 1 to the border and editor", function()
     local dimensions = { columns = 20, lines = 10, cmdheight = 1 }
     local rounded = viewer._layout({
@@ -376,6 +440,22 @@ return function(t)
         vim.wo[root_win].winhighlight
       )
       t.equal(10, vim.wo[root_win].winblend)
+      t.equal(0, #notifications)
+    end)
+  end)
+
+  t.test("viewer open honors viewer.position for floats", function()
+    local env = new_env()
+    local notifications = {}
+
+    run_case({ layout = "float", position = "top", width = 0.4, height = 0.4 }, terminal_stubs(env, notifications), function()
+      local root = "/tmp/viewer-project"
+      viewer.open_for_session(root, { id = "ses_alpha", title = "Alpha session" })
+
+      local win = vim.api.nvim_get_current_win()
+      local config = vim.api.nvim_win_get_config(win)
+      t.equal("editor", config.relative)
+      t.equal(0, config.row, "a top-anchored viewer should open on the first row")
       t.equal(0, #notifications)
     end)
   end)

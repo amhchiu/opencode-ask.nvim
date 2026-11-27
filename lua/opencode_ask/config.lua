@@ -23,6 +23,7 @@ M.defaults = {
   viewer = {
     keymap = "<leader>ot",
     layout = "float", -- "float" | "right" | "bottom"
+    position = "center", -- "center" | "top" | "bottom" | "left" | "right"
     width = 0.8,
     height = 0.8,
     border = "rounded",
@@ -35,6 +36,13 @@ M.defaults = {
 local UI_BORDER_NAMES = { "none", "single", "double", "rounded", "solid", "shadow" }
 local UI_BORDER_LIST_LENGTHS = { [1] = true, [2] = true, [4] = true, [8] = true }
 local VIEWER_LAYOUT_NAMES = { float = true, right = true, bottom = true }
+local VIEWER_POSITION_NAMES = {
+  center = true,
+  top = true,
+  bottom = true,
+  left = true,
+  right = true,
+}
 
 local function deepcopy(value)
   if type(value) ~= "table" then
@@ -155,6 +163,10 @@ local function viewer_validation_error(viewer)
 
   if not VIEWER_LAYOUT_NAMES[viewer.layout] then
     return 'opencode_ask: `viewer.layout` must be "float", "right", or "bottom"'
+  end
+
+  if not VIEWER_POSITION_NAMES[viewer.position] then
+    return 'opencode_ask: `viewer.position` must be "center", "top", "bottom", "left", or "right"'
   end
 
   for _, key in ipairs({ "width", "height" }) do
