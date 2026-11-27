@@ -65,7 +65,8 @@ return {
     viewer = {
       keymap = "<leader>ot", -- Normal-mode toggle; false disables it.
       layout = "float", -- "float", "right", or "bottom".
-      position = "center", -- Floating viewer: "center", "top", "bottom", "left", or "right".
+      position = "center", -- Floating viewer: "center", "top", "bottom", "left",
+      -- "right", "top-left", "top-right", "bottom-left", or "bottom-right".
       width = 0.8, -- Fraction in (0, 1] or an integer > 1 columns.
       height = 0.8, -- Fraction in (0, 1] or an integer > 1 rows.
       border = "rounded", -- Floating viewer only.
@@ -108,7 +109,7 @@ default `api.timeout`.
 | `ui.winblend` | `number` | `0` | Transparency of the floating prompt, from 0 (opaque) to 100 (fully transparent). |
 | `viewer.keymap` | `string` or `false` | `"<leader>ot"` | Normal-mode toggle mapping installed by `setup()`. Set to `false` to install nothing. |
 | `viewer.layout` | `string` | `"float"` | `"float"`, `"right"`, or `"bottom"`. |
-| `viewer.position` | `string` | `"center"` | Placement of the floating viewer: `"center"`, `"top"`, `"bottom"`, `"left"`, or `"right"`. `"top"` and `"bottom"` stay horizontally centered; `"left"` and `"right"` stay vertically centered. Applies only when `viewer.layout` is `"float"`. |
+| `viewer.position` | `string` | `"center"` | Placement of the floating viewer: `"center"`, `"top"`, `"bottom"`, `"left"`, `"right"`, `"top-left"`, `"top-right"`, `"bottom-left"`, or `"bottom-right"`. Edge anchors stay centered on the other axis; corners touch both edges. Applies only when `viewer.layout` is `"float"`. |
 | `viewer.width` | `number` | `0.8` | Width of a floating or right-split viewer: a fraction in `(0, 1]` (`1` = 100%) or an integer above 1 in columns. |
 | `viewer.height` | `number` | `0.8` | Height of a floating or bottom-split viewer: a fraction in `(0, 1]` (`1` = 100%) or an integer above 1 in rows. |
 | `viewer.border` | `string` or border list | `"rounded"` | Border of the floating viewer, using the same values as `ui.border`. Applies only when `viewer.layout` is `"float"`. |

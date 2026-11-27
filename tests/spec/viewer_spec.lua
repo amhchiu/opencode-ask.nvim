@@ -242,10 +242,38 @@ return function(t)
     local right = layout("right")
     t.equal(2, right.row, "right should stay vertically centered")
     t.equal(18, right.col, "right should sit on the last available column")
+
+    local top_left = layout("top-left")
+    t.equal(0, top_left.row, "top-left should sit on the first row")
+    t.equal(0, top_left.col, "top-left should sit on the first column")
+
+    local top_right = layout("top-right")
+    t.equal(0, top_right.row, "top-right should sit on the first row")
+    t.equal(18, top_right.col, "top-right should sit on the last available column")
+
+    local bottom_left = layout("bottom-left")
+    t.equal(4, bottom_left.row, "bottom-left should sit on the last available row")
+    t.equal(0, bottom_left.col, "bottom-left should sit on the first column")
+
+    local bottom_right = layout("bottom-right")
+    t.equal(4, bottom_right.row, "bottom-right should sit on the last available row")
+    t.equal(18, bottom_right.col, "bottom-right should sit on the last available column")
   end)
 
   t.test("viewer layout keeps anchored floats inside a tiny editor", function()
-    for _, position in ipairs({ "center", "top", "bottom", "left", "right" }) do
+    local positions = {
+      "center",
+      "top",
+      "bottom",
+      "left",
+      "right",
+      "top-left",
+      "top-right",
+      "bottom-left",
+      "bottom-right",
+    }
+
+    for _, position in ipairs(positions) do
       for _, columns in ipairs({ 1, 2, 3, 5 }) do
         local layout = viewer._layout({
           layout = "float",
@@ -456,6 +484,22 @@ return function(t)
       local config = vim.api.nvim_win_get_config(win)
       t.equal("editor", config.relative)
       t.equal(0, config.row, "a top-anchored viewer should open on the first row")
+      t.equal(0, #notifications)
+    end)
+
+    run_case({ layout = "float", position = "bottom-right", width = 0.4, height = 0.4 }, terminal_stubs(env, notifications), function()
+      local root = "/tmp/viewer-project-corner"
+      viewer.open_for_session(root, { id = "ses_beta", title = "Beta session" })
+
+      local config = vim.api.nvim_win_get_config(vim.api.nvim_get_current_win())
+      local expected = viewer._layout(
+        vim.tbl_extend("force", {}, init.options.viewer, { width = 0.4, height = 0.4 }),
+        { columns = vim.o.columns, lines = vim.o.lines, cmdheight = vim.o.cmdheight }
+      )
+
+      t.equal("editor", config.relative)
+      t.equal(expected.row, config.row, "a bottom-right viewer should sit on the last available row")
+      t.equal(expected.col, config.col, "a bottom-right viewer should sit on the last available column")
       t.equal(0, #notifications)
     end)
   end)

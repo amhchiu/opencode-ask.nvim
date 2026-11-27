@@ -256,7 +256,19 @@ return function(t)
   end)
 
   t.test("viewer.position accepts the documented anchors", function()
-    for _, value in ipairs({ "center", "top", "bottom", "left", "right" }) do
+    local anchors = {
+      "center",
+      "top",
+      "bottom",
+      "left",
+      "right",
+      "top-left",
+      "top-right",
+      "bottom-left",
+      "bottom-right",
+    }
+
+    for _, value in ipairs(anchors) do
       local merged = config.merge({ viewer = { position = value } })
       t.equal(value, merged.viewer.position)
     end
