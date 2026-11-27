@@ -81,8 +81,9 @@ end
 --- setup-specific options in place.
 local function reset_plugin_keymap()
   with_options({}, function()
-    init.setup({ keymap = false, state_path = vim.fn.tempname() })
+    init.setup({ keymap = false, viewer = { keymap = false }, state_path = vim.fn.tempname() })
   end)
+  delete_mapping("n", "<leader>ot")
 end
 
 return function(t)
@@ -652,7 +653,11 @@ return function(t)
 
     local ok, err = pcall(function()
       with_options({}, function()
-        local options = init.setup({ keymap = key, state_path = vim.fn.tempname() })
+        local options = init.setup({
+          keymap = key,
+          viewer = { keymap = false },
+          state_path = vim.fn.tempname(),
+        })
         t.equal(key, options.keymap)
         t.assert(vim.fn.maparg(key, "x") ~= "", "the visual-mode mapping should exist")
         t.equal("", vim.fn.maparg(key, "s"), "no select-mode mapping should be installed")
@@ -677,7 +682,11 @@ return function(t)
 
     local ok, err = pcall(function()
       with_options({}, function()
-        init.setup({ keymap = custom_key, state_path = vim.fn.tempname() })
+        init.setup({
+          keymap = custom_key,
+          viewer = { keymap = false },
+          state_path = vim.fn.tempname(),
+        })
         t.assert(vim.fn.maparg(custom_key, "x") ~= "", "the custom mapping should exist")
         t.equal("", vim.fn.maparg(default_key, "x"), "the default mapping should not be installed")
       end)
@@ -696,7 +705,11 @@ return function(t)
 
     local ok, err = pcall(function()
       with_options({}, function()
-        local options = init.setup({ keymap = false, state_path = vim.fn.tempname() })
+        local options = init.setup({
+          keymap = false,
+          viewer = { keymap = false },
+          state_path = vim.fn.tempname(),
+        })
         t.equal(false, options.keymap)
         t.equal("", vim.fn.maparg(key, "x"), "no mapping should be installed")
       end)
@@ -709,7 +722,7 @@ return function(t)
   end)
 
   t.test("plugin file registers commands with range and callbacks", function()
-    local names = { "OpencodeAsk", "OpencodeSession", "OpencodeSessionClear" }
+    local names = { "OpencodeAsk", "OpencodeSession", "OpencodeSessionClear", "OpencodeToggle" }
     local saved_loaded = vim.g.loaded_opencode_ask
     for _, name in ipairs(names) do
       pcall(vim.api.nvim_del_user_command, name)
@@ -734,6 +747,9 @@ return function(t)
         { init, "clear_session", function()
           calls.clear = (calls.clear or 0) + 1
         end },
+        { init, "toggle", function()
+          calls.toggle = (calls.toggle or 0) + 1
+        end },
       }, function()
         local loaded, load_err = pcall(dofile, plugin_path)
         t.assert(loaded, "plugin file should load: " .. tostring(load_err))
@@ -747,6 +763,8 @@ return function(t)
         t.equal("0", commands.OpencodeAsk.nargs)
         t.equal("0", commands.OpencodeSession.nargs)
         t.equal("0", commands.OpencodeSessionClear.nargs)
+        t.equal("0", commands.OpencodeToggle.nargs)
+        t.equal("Toggle the OpenCode session viewer", commands.OpencodeToggle.definition)
 
         vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "one", "two", "three", "four", "five" })
         vim.api.nvim_set_current_buf(buffer)
@@ -762,6 +780,8 @@ return function(t)
         t.equal(1, calls.select)
         vim.cmd("OpencodeSessionClear")
         t.equal(1, calls.clear)
+        vim.cmd("OpencodeToggle")
+        t.equal(1, calls.toggle)
 
         -- The loaded guard prevents re-sourcing from recreating commands.
         vim.api.nvim_del_user_command("OpencodeSession")
@@ -830,10 +850,10 @@ return function(t)
 
     local ok, err = pcall(function()
       with_options({}, function()
-        init.setup({ keymap = first, state_path = vim.fn.tempname() })
+        init.setup({ keymap = first, viewer = { keymap = false }, state_path = vim.fn.tempname() })
         t.assert(vim.fn.maparg(first, "x") ~= "", "the first mapping should be installed")
 
-        init.setup({ keymap = second, state_path = vim.fn.tempname() })
+        init.setup({ keymap = second, viewer = { keymap = false }, state_path = vim.fn.tempname() })
         t.equal("", vim.fn.maparg(first, "x"), "the previous plugin mapping should be removed")
         t.assert(vim.fn.maparg(second, "x") ~= "", "the new mapping should be installed")
       end)
@@ -853,10 +873,14 @@ return function(t)
 
     local ok, err = pcall(function()
       with_options({}, function()
-        init.setup({ keymap = key, state_path = vim.fn.tempname() })
+        init.setup({ keymap = key, viewer = { keymap = false }, state_path = vim.fn.tempname() })
         t.assert(vim.fn.maparg(key, "x") ~= "", "the mapping should be installed")
 
-        local options = init.setup({ keymap = false, state_path = vim.fn.tempname() })
+        local options = init.setup({
+          keymap = false,
+          viewer = { keymap = false },
+          state_path = vim.fn.tempname(),
+        })
         t.equal(false, options.keymap)
         t.equal("", vim.fn.maparg(key, "x"), "disabling the keymap should remove the plugin mapping")
       end)
@@ -880,13 +904,13 @@ return function(t)
 
     local ok, err = pcall(function()
       with_options({}, function()
-        init.setup({ keymap = first, state_path = vim.fn.tempname() })
+        init.setup({ keymap = first, viewer = { keymap = false }, state_path = vim.fn.tempname() })
 
         -- The user replaces the plugin mapping and adds an unrelated mapping.
         vim.keymap.set("x", first, user_callback, { desc = "user mapping" })
         vim.keymap.set("x", unrelated, user_callback, { desc = "unrelated user mapping" })
 
-        init.setup({ keymap = second, state_path = vim.fn.tempname() })
+        init.setup({ keymap = second, viewer = { keymap = false }, state_path = vim.fn.tempname() })
 
         local replaced = vim.fn.maparg(first, "x", false, true)
         t.equal("table", type(replaced), "the user mapping should still exist")
@@ -899,6 +923,106 @@ return function(t)
     delete_mapping("x", first)
     delete_mapping("x", second)
     delete_mapping("x", unrelated)
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("setup installs an n-mode viewer toggle keymap", function()
+    local ask_key = "<leader>oq"
+    local viewer_key = "<leader>ot"
+    delete_mapping("x", ask_key)
+    delete_mapping("n", viewer_key)
+    reset_plugin_keymap()
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        local options = init.setup({ keymap = false, state_path = vim.fn.tempname() })
+        t.equal(viewer_key, options.viewer.keymap)
+        t.assert(vim.fn.maparg(viewer_key, "n") ~= "", "the viewer mapping should exist")
+        t.equal("", vim.fn.maparg(viewer_key, "x"), "the viewer mapping should not be visual-mode")
+
+        local mapping = vim.fn.maparg(viewer_key, "n", false, true)
+        t.equal("Toggle the OpenCode session viewer", mapping.desc)
+      end)
+    end)
+
+    reset_plugin_keymap()
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("setup replaces and removes the viewer toggle keymap", function()
+    local first = "<leader>oz"
+    local second = "<leader>oy"
+    delete_mapping("n", first)
+    delete_mapping("n", second)
+    reset_plugin_keymap()
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        init.setup({ keymap = false, viewer = { keymap = first }, state_path = vim.fn.tempname() })
+        t.assert(vim.fn.maparg(first, "n") ~= "", "the first viewer mapping should be installed")
+
+        init.setup({ keymap = false, viewer = { keymap = second }, state_path = vim.fn.tempname() })
+        t.equal("", vim.fn.maparg(first, "n"), "the previous viewer mapping should be removed")
+        t.assert(vim.fn.maparg(second, "n") ~= "", "the new viewer mapping should be installed")
+
+        local options = init.setup({
+          keymap = false,
+          viewer = { keymap = false },
+          state_path = vim.fn.tempname(),
+        })
+        t.equal(false, options.viewer.keymap)
+        t.equal(
+          "",
+          vim.fn.maparg(second, "n"),
+          "disabling the viewer keymap should remove the plugin mapping"
+        )
+      end)
+    end)
+
+    reset_plugin_keymap()
+    delete_mapping("n", first)
+    delete_mapping("n", second)
+    if not ok then
+      error(err, 0)
+    end
+  end)
+
+  t.test("setup preserves user viewer mappings it did not install", function()
+    local first = "<leader>oz"
+    local second = "<leader>oy"
+    local unrelated = "<leader>ox"
+    local user_callback = function() end
+    delete_mapping("n", first)
+    delete_mapping("n", second)
+    delete_mapping("n", unrelated)
+    reset_plugin_keymap()
+
+    local ok, err = pcall(function()
+      with_options({}, function()
+        init.setup({ keymap = false, viewer = { keymap = first }, state_path = vim.fn.tempname() })
+
+        -- The user replaces the plugin viewer mapping and adds an unrelated one.
+        vim.keymap.set("n", first, user_callback, { desc = "user viewer mapping" })
+        vim.keymap.set("n", unrelated, user_callback, { desc = "unrelated user mapping" })
+
+        init.setup({ keymap = false, viewer = { keymap = second }, state_path = vim.fn.tempname() })
+
+        local replaced = vim.fn.maparg(first, "n", false, true)
+        t.equal("table", type(replaced), "the user viewer mapping should still exist")
+        t.equal(user_callback, replaced.callback, "the user viewer mapping should not be deleted")
+        t.assert(vim.fn.maparg(unrelated, "n") ~= "", "unrelated user mappings should be preserved")
+        t.assert(vim.fn.maparg(second, "n") ~= "", "the new plugin viewer mapping should be installed")
+      end)
+    end)
+
+    reset_plugin_keymap()
+    delete_mapping("n", first)
+    delete_mapping("n", second)
+    delete_mapping("n", unrelated)
     if not ok then
       error(err, 0)
     end

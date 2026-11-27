@@ -17,10 +17,21 @@ M.defaults = {
     position = "selection", -- "selection" (above/below/center) | "center"
     winblend = 0,
   },
+  viewer = {
+    keymap = "<leader>ot",
+    layout = "float", -- "float" | "right" | "bottom"
+    width = 0.8,
+    height = 0.8,
+    border = "rounded",
+    winblend = 0,
+    auto_open = false,
+    start_insert = false,
+  },
 }
 
 local UI_BORDER_NAMES = { "none", "single", "double", "rounded", "solid", "shadow" }
 local UI_BORDER_LIST_LENGTHS = { [1] = true, [2] = true, [4] = true, [8] = true }
+local VIEWER_LAYOUT_NAMES = { float = true, right = true, bottom = true }
 
 local function deepcopy(value)
   if type(value) ~= "table" then
@@ -57,6 +68,40 @@ local function is_border_list(value)
   return true
 end
 
+local function border_validation_error(border, name)
+  local border_ok = false
+  if type(border) == "string" then
+    for _, candidate in ipairs(UI_BORDER_NAMES) do
+      if border == candidate then
+        border_ok = true
+        break
+      end
+    end
+  elseif type(border) == "table" and is_border_list(border) then
+    border_ok = true
+  end
+
+  if not border_ok then
+    return "opencode_ask: `" .. name .. "` must be a border name "
+      .. '("none", "single", "double", "rounded", "solid", "shadow") '
+      .. "or a list of 1, 2, 4, or 8 border strings"
+  end
+
+  return nil
+end
+
+local function winblend_validation_error(winblend, name)
+  if type(winblend) ~= "number"
+    or winblend < 0
+    or winblend > 100
+    or math.floor(winblend) ~= winblend
+  then
+    return "opencode_ask: `" .. name .. "` must be an integer between 0 and 100"
+  end
+
+  return nil
+end
+
 local function ui_validation_error(ui)
   if type(ui) ~= "table" then
     return "opencode_ask: `ui` must be a table"
@@ -73,32 +118,64 @@ local function ui_validation_error(ui)
     return 'opencode_ask: `ui.position` must be "selection" or "center"'
   end
 
-  local border = ui.border
-  local border_ok = false
-  if type(border) == "string" then
-    for _, name in ipairs(UI_BORDER_NAMES) do
-      if border == name then
-        border_ok = true
-        break
-      end
+  local border_err = border_validation_error(ui.border, "ui.border")
+  if border_err then
+    return border_err
+  end
+
+  return winblend_validation_error(ui.winblend, "ui.winblend")
+end
+
+local function viewer_span_ok(value)
+  if type(value) ~= "number" or value ~= value then
+    return false
+  end
+
+  if value > 0 and value <= 1 then
+    return true
+  end
+
+  return value > 1 and value < math.huge and math.floor(value) == value
+end
+
+local function viewer_validation_error(viewer)
+  if type(viewer) ~= "table" then
+    return "opencode_ask: `viewer` must be a table"
+  end
+
+  local keymap = viewer.keymap
+  if keymap ~= nil and keymap ~= false then
+    if type(keymap) ~= "string" or vim.trim(keymap) == "" then
+      return "opencode_ask: `viewer.keymap` must be a non-empty string, false, or nil"
     end
-  elseif type(border) == "table" and is_border_list(border) then
-    border_ok = true
   end
 
-  if not border_ok then
-    return "opencode_ask: `ui.border` must be a border name "
-      .. '("none", "single", "double", "rounded", "solid", "shadow") '
-      .. "or a list of 1, 2, 4, or 8 border strings"
+  if not VIEWER_LAYOUT_NAMES[viewer.layout] then
+    return 'opencode_ask: `viewer.layout` must be "float", "right", or "bottom"'
   end
 
-  local winblend = ui.winblend
-  if type(winblend) ~= "number"
-    or winblend < 0
-    or winblend > 100
-    or math.floor(winblend) ~= winblend
-  then
-    return "opencode_ask: `ui.winblend` must be an integer between 0 and 100"
+  for _, key in ipairs({ "width", "height" }) do
+    if not viewer_span_ok(viewer[key]) then
+      return "opencode_ask: `viewer."
+        .. key
+        .. "` must be a fraction in (0, 1] or an integer greater than 1"
+    end
+  end
+
+  local border_err = border_validation_error(viewer.border, "viewer.border")
+  if border_err then
+    return border_err
+  end
+
+  local winblend_err = winblend_validation_error(viewer.winblend, "viewer.winblend")
+  if winblend_err then
+    return winblend_err
+  end
+
+  for _, key in ipairs({ "auto_open", "start_insert" }) do
+    if type(viewer[key]) ~= "boolean" then
+      return "opencode_ask: `viewer." .. key .. "` must be a boolean"
+    end
   end
 
   return nil
@@ -121,6 +198,11 @@ function M.merge(opts)
   local ui_err = ui_validation_error(merged.ui)
   if ui_err then
     error(ui_err, 2)
+  end
+
+  local viewer_err = viewer_validation_error(merged.viewer)
+  if viewer_err then
+    error(viewer_err, 2)
   end
 
   return merged
