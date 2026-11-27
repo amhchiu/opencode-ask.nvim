@@ -1,5 +1,7 @@
 local M = {}
 
+local model = require("opencode_ask.model")
+
 local function error_message(message)
   return "opencode-ask: " .. message
 end
@@ -313,10 +315,23 @@ function M.create_session(cwd, title, callback)
   local trimmed_cwd = vim.trim(cwd)
   local trimmed_title = vim.trim(title)
 
-  post_json("/api/session", {
+  local model_ref, model_err = model.resolve(options().model)
+  if model_err then
+    vim.schedule(function()
+      done(model_err)
+    end)
+    return
+  end
+
+  local payload = {
     title = trimmed_title,
     location = { directory = trimmed_cwd },
-  }, trimmed_cwd, function(err, body)
+  }
+  if model_ref then
+    payload.model = model_ref
+  end
+
+  post_json("/api/session", payload, trimmed_cwd, function(err, body)
     if err then
       done(err)
       return

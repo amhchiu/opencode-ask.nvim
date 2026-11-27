@@ -1,7 +1,10 @@
 local M = {}
 
+local model = require("opencode_ask.model")
+
 M.defaults = {
   session = nil,
+  model = nil,
   keymap = "<leader>oq",
   save = true,
   picker = "fzf-lua",
@@ -187,6 +190,13 @@ function M.merge(opts)
 
   if merged.session ~= nil and type(merged.session) ~= "string" then
     error("opencode_ask: `session` must be a string (an OpenCode session ID) or nil", 2)
+  end
+
+  if merged.model ~= nil and merged.model ~= false then
+    local _, model_err = model.parse(merged.model)
+    if model_err then
+      error(model_err, 2)
+    end
   end
 
   if merged.keymap ~= nil and merged.keymap ~= false then

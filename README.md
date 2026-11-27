@@ -45,6 +45,10 @@ return {
     -- Pin one session instead of using the per-project session picker.
     -- session = "ses_...",
 
+    -- Model for sessions this plugin creates. nil mirrors the model most
+    -- recently used in the OpenCode TUI; false lets OpenCode pick its default.
+    -- model = "opencode-go/deepseek-v4.1-flash#high",
+
     keymap = "<leader>oa",
     save = false,
 
@@ -89,6 +93,7 @@ default `api.timeout`.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `session` | `string` or `nil` | `nil` | Pin every question to this OpenCode session ID. When `nil`, the plugin uses the stored project session or opens the picker. |
+| `model` | `string`, table, `false`, or `nil` | `nil` | Model used when the plugin creates a session. `nil` mirrors the model most recently used in the OpenCode TUI. A string is `"provider/model"` with an optional `#variant` (for example `"opencode-go/deepseek-v4.1-flash#high"`); a table is `{ providerID, id, variant }`. `false` sends no model and lets OpenCode use its own fallback. |
 | `keymap` | `string` or `false` | `"<leader>oq"` | Visual-mode only mapping (`x` mode, not select mode) installed by `setup()`. Set to `false` to install nothing. |
 | `save` | `boolean` | `true` | Save a modified file buffer before sending. The send is aborted when saving fails. |
 | `picker` | `string` | `"fzf-lua"` | Use `fzf-lua` when it is set to `"fzf-lua"` and available; otherwise use `vim.ui.select`. |
@@ -179,6 +184,10 @@ Viewer controls:
 4. The chosen or created session is stored for the project, keyed by its
    normalized project root (the Git root, or the current directory when there
    is no `.git`).
+
+Sessions created here use the model most recently selected in the OpenCode TUI.
+Set `model` to pin a different model, or `model = false` to let OpenCode choose
+its own fallback. Existing sessions keep the model they were created with.
 
 You can also create or start a session in the OpenCode TUI and then select it
 here. If no session is stored and `session` is not pinned, asking opens the
@@ -328,6 +337,17 @@ The plugin warns and clears the stored entry unless `session` is pinned. Run
 
 `:checkhealth opencode_ask` names the path and suggests recovery. Delete the
 file to reset all projects, or run `:OpencodeSession` to rewrite it.
+
+**New session uses an unexpected model**
+
+Sessions created by the plugin copy the model most recently used in the OpenCode
+TUI, read from `$XDG_STATE_HOME/opencode/model.json` (usually
+`~/.local/state/opencode/model.json`). If that file has no usable entry, the
+plugin sends no model and OpenCode falls back to the newest available model.
+Set `model = "provider/model"` (optionally with `#variant`) to pin one, or
+`model = false` to let OpenCode choose its fallback. The plugin only reads the
+model state; it never rewrites it. Existing sessions keep the model they were
+created with; switch one in the OpenCode TUI or `opencode mini`.
 
 **Empty, unnamed, or non-file buffer**
 
