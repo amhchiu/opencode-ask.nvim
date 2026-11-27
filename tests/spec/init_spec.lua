@@ -3,6 +3,7 @@ local client = require("opencode_ask.client")
 local selection = require("opencode_ask.selection")
 local sessions = require("opencode_ask.sessions")
 local ui = require("opencode_ask.ui")
+local viewer = require("opencode_ask.viewer")
 
 local source = debug.getinfo(1, "S").source:sub(2)
 local spec_dir = vim.fs.dirname(source)
@@ -423,6 +424,7 @@ return function(t)
   t.test("ask tells the user to update a pinned session that disappeared", function()
     local context = make_context()
     local clear_called = false
+    local invalidated_root
     local notifications = {}
 
     with_options({ save = true, session = "ses_pinned" }, function()
@@ -446,6 +448,9 @@ return function(t)
           clear_called = true
           return true
         end },
+        { viewer, "invalidate", function(root)
+          invalidated_root = root
+        end },
         { vim, "notify", notification_stub(notifications) },
       }, function()
         local ok, err = pcall(init.ask, {})
@@ -454,6 +459,7 @@ return function(t)
     end)
 
     t.equal(false, clear_called, "a pinned session must not clear the stored state")
+    t.equal(context.project_root, invalidated_root, "the pinned session's viewer should be invalidated")
     t.equal(1, #notifications)
     t.equal(WARN, notifications[1].level)
     t.matches("config%.session", notifications[1].message)
@@ -462,6 +468,7 @@ return function(t)
   t.test("ask clears the stored session when a stored session disappeared", function()
     local context = make_context()
     local clear_root
+    local invalidated_root
     local notifications = {}
 
     with_options({ save = true, session = nil }, function()
@@ -485,6 +492,9 @@ return function(t)
           clear_root = root
           return true
         end },
+        { viewer, "invalidate", function(root)
+          invalidated_root = root
+        end },
         { vim, "notify", notification_stub(notifications) },
       }, function()
         local ok, err = pcall(init.ask, {})
@@ -493,6 +503,7 @@ return function(t)
     end)
 
     t.equal(context.project_root, clear_root, "clear should receive the project root")
+    t.equal(context.project_root, invalidated_root, "the stored session's viewer should be invalidated")
     t.equal(1, #notifications)
     t.equal(WARN, notifications[1].level)
     t.matches(":OpencodeSession", notifications[1].message)
@@ -1171,5 +1182,247 @@ return function(t)
     if not ok then
       error(err, 0)
     end
+  end)
+
+  t.test("toggle hides the focused viewer without resolving the project", function()
+    local project_root_called = false
+    local resolve_called = false
+
+    with_stubs({
+      { viewer, "hide_current", function()
+        return true
+      end },
+      { selection, "project_root", function()
+        project_root_called = true
+        return "/tmp/project"
+      end },
+      { sessions, "resolve", function()
+        resolve_called = true
+      end },
+    }, function()
+      local ok, err = pcall(init.toggle)
+      t.assert(ok, "toggle should not throw: " .. tostring(err))
+    end)
+
+    t.equal(false, project_root_called, "a focused viewer should hide without resolving the root")
+    t.equal(false, resolve_called, "a focused viewer should hide without resolving a session")
+  end)
+
+  t.test("toggle hides an open viewer for the project without resolving", function()
+    local root_arg
+    local hidden_root
+    local resolve_called = false
+
+    with_stubs({
+      { viewer, "hide_current", function()
+        return false
+      end },
+      { selection, "project_root", function(target)
+        root_arg = target
+        return "/tmp/project"
+      end },
+      { viewer, "is_open", function(root)
+        t.equal("/tmp/project", root)
+        return true
+      end },
+      { viewer, "hide", function(root)
+        hidden_root = root
+      end },
+      { sessions, "resolve", function()
+        resolve_called = true
+      end },
+    }, function()
+      local ok, err = pcall(init.toggle)
+      t.assert(ok, "toggle should not throw: " .. tostring(err))
+    end)
+
+    t.equal(0, root_arg, "toggle should use the current buffer's project")
+    t.equal("/tmp/project", hidden_root, "the open viewer should be hidden")
+    t.equal(false, resolve_called, "an open viewer should hide without resolving a session")
+  end)
+
+  t.test("toggle resolves the project session and opens the viewer", function()
+    local root_arg
+    local opened
+
+    with_stubs({
+      { viewer, "hide_current", function()
+        return false
+      end },
+      { selection, "project_root", function(target)
+        root_arg = target
+        return "/tmp/project"
+      end },
+      { viewer, "is_open", function()
+        return false
+      end },
+      { sessions, "resolve", function(root, callback)
+        t.equal("/tmp/project", root)
+        callback(nil, { id = "ses_chosen", title = "Chosen session" })
+      end },
+      { viewer, "open_for_session", function(root, session)
+        opened = { root = root, session = session }
+      end },
+    }, function()
+      local ok, err = pcall(init.toggle)
+      t.assert(ok, "toggle should not throw: " .. tostring(err))
+    end)
+
+    t.equal(0, root_arg)
+    t.assert(opened ~= nil, "the viewer should open for the resolved session")
+    t.equal("/tmp/project", opened.root)
+    t.equal("ses_chosen", opened.session.id)
+  end)
+
+  t.test("toggle notifies resolve errors and ignores picker cancellation", function()
+    local notifications = {}
+    local opened = false
+
+    with_stubs({
+      { viewer, "hide_current", function()
+        return false
+      end },
+      { selection, "project_root", function()
+        return "/tmp/project"
+      end },
+      { viewer, "is_open", function()
+        return false
+      end },
+      { sessions, "resolve", function(_, callback)
+        callback("opencode-ask: resolve exploded")
+      end },
+      { viewer, "open_for_session", function()
+        opened = true
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.toggle)
+      t.assert(ok, "toggle should not throw: " .. tostring(err))
+    end)
+
+    t.equal(false, opened, "no viewer should open after a resolve error")
+    t.equal(1, #notifications)
+    t.equal(WARN, notifications[1].level)
+    t.matches("resolve exploded", notifications[1].message)
+
+    notifications = {}
+    with_stubs({
+      { viewer, "hide_current", function()
+        return false
+      end },
+      { selection, "project_root", function()
+        return "/tmp/project"
+      end },
+      { viewer, "is_open", function()
+        return false
+      end },
+      { sessions, "resolve", function(_, callback)
+        callback(nil, nil)
+      end },
+      { viewer, "open_for_session", function()
+        opened = true
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.toggle)
+      t.assert(ok, "toggle should not throw: " .. tostring(err))
+    end)
+
+    t.equal(false, opened, "picker cancellation should not open the viewer")
+    t.equal(0, #notifications, "picker cancellation should be silent")
+  end)
+
+  t.test("ask opens the viewer only when auto_open is enabled", function()
+    local context = make_context()
+
+    local function run(auto_open)
+      local opened
+      local notifications = {}
+
+      with_options({ save = false, viewer = { auto_open = auto_open } }, function()
+        with_stubs({
+          { selection, "capture", function()
+            return context
+          end },
+          { ui, "prompt", function(_, on_submit)
+            on_submit("Why?")
+          end },
+          { sessions, "resolve", function(_, callback)
+            callback(nil, { id = "ses_test", title = "Test session" })
+          end },
+          { client, "send", function(_, _, _, callback)
+            callback(nil, { accepted = true })
+          end },
+          { viewer, "open_for_session", function(root, session)
+            opened = { root = root, session = session }
+          end },
+          { vim, "notify", notification_stub(notifications) },
+        }, function()
+          local ok, err = pcall(init.ask, {})
+          t.assert(ok, "ask should not throw: " .. tostring(err))
+        end)
+      end)
+
+      return opened, notifications
+    end
+
+    local closed, closed_notifications = run(false)
+    t.equal(nil, closed, "auto_open = false must not open the viewer")
+    t.equal(1, #closed_notifications, "only the send notification should be shown")
+
+    local opened = run(true)
+    t.assert(opened ~= nil, "auto_open = true should open the viewer")
+    t.equal(context.project_root, opened.root)
+    t.equal("ses_test", opened.session.id)
+  end)
+
+  t.test("select_session invalidates the viewer for the selected session", function()
+    local invalidated = {}
+    local notifications = {}
+
+    with_stubs({
+      { selection, "project_root", function()
+        return "/tmp/project"
+      end },
+      { sessions, "choose", function(_, callback)
+        callback(nil, { id = "ses_chosen", title = "Chosen session" })
+      end },
+      { viewer, "invalidate", function(root, keep_session_id)
+        invalidated.root = root
+        invalidated.keep_session_id = keep_session_id
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.select_session)
+      t.assert(ok, "select_session should not throw: " .. tostring(err))
+    end)
+
+    t.equal("/tmp/project", invalidated.root, "invalidate should receive the project root")
+    t.equal("ses_chosen", invalidated.keep_session_id, "the selected session should be kept alive")
+  end)
+
+  t.test("clear_session invalidates the project's viewer", function()
+    local invalidated = {}
+    local notifications = {}
+
+    with_stubs({
+      { selection, "project_root", function()
+        return "/tmp/project"
+      end },
+      { sessions, "clear", function()
+        return true
+      end },
+      { viewer, "invalidate", function(root, keep_session_id)
+        invalidated.root = root
+        invalidated.keep_session_id = keep_session_id
+      end },
+      { vim, "notify", notification_stub(notifications) },
+    }, function()
+      local ok, err = pcall(init.clear_session)
+      t.assert(ok, "clear_session should not throw: " .. tostring(err))
+    end)
+
+    t.equal("/tmp/project", invalidated.root, "invalidate should receive the project root")
+    t.equal(nil, invalidated.keep_session_id, "clearing should wipe the viewer")
   end)
 end
