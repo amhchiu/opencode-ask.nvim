@@ -87,13 +87,26 @@ end
 
 --- Run client.create_session with a stubbed vim.system and wait for its callback.
 --- Returns calls, err, session, argv, system_opts.
-local function run_create(cwd, title, system_stub, api)
+--- Pass USE_DEFAULT_MODEL as model to exercise the automatic model lookup.
+local USE_DEFAULT_MODEL = {}
+
+local function run_create(cwd, title, system_stub, api, model)
   local calls = 0
   local got_err, got_session
   local argv, system_opts
   local finished = false
 
-  with_options({ api = api }, function()
+  local changes = { api = api }
+  if model == USE_DEFAULT_MODEL then
+    changes.model = nil
+  elseif model ~= nil then
+    changes.model = model
+  else
+    -- Keep the real user's OpenCode model state out of the assertions.
+    changes.model = false
+  end
+
+  with_options(changes, function()
     with_stub(vim, "system", function(cmd, opts, on_exit)
       argv = cmd
       system_opts = opts
@@ -539,6 +552,77 @@ return function(t)
     t.equal("/tmp/my project", opts.cwd)
     t.equal(true, opts.text)
     t.equal(4321, opts.timeout)
+  end)
+
+  t.test("create_session sends the configured model", function()
+    local calls, err, _, argv = run_create(
+      "/tmp/project",
+      "Title",
+      function(_, _, on_exit)
+        on_exit({ code = 0, stdout = '{"data":{"id":"ses_created"}}', stderr = "" })
+        return { pid = 0 }
+      end,
+      { command = vim.v.progpath, timeout = 1234 },
+      "opencode-go/deepseek-v4.1-flash#high"
+    )
+
+    t.equal(1, calls)
+    t.equal(nil, err)
+
+    local payload = vim.json.decode(argv[6])
+    t.equal("Title", payload.title)
+    t.equal({
+      providerID = "opencode-go",
+      id = "deepseek-v4.1-flash",
+      variant = "high",
+    }, payload.model)
+  end)
+
+  t.test("create_session mirrors the model state most recently used by OpenCode", function()
+    local state_home = vim.fn.tempname()
+    vim.fn.mkdir(vim.fs.joinpath(state_home, "opencode"), "p")
+    vim.fn.writefile({
+      '{"recent":[{"providerID":"opencode-go","modelID":"deepseek-v4.1-flash"}],',
+      '"variant":{"opencode-go/deepseek-v4.1-flash":"high"}}',
+    }, vim.fs.joinpath(state_home, "opencode", "model.json"))
+
+    local saved = vim.env.XDG_STATE_HOME
+    vim.env.XDG_STATE_HOME = state_home
+
+    local ok, calls, err, _, argv = pcall(run_create, "/tmp/project", "Title", function(_, _, on_exit)
+      on_exit({ code = 0, stdout = '{"data":{"id":"ses_created"}}', stderr = "" })
+      return { pid = 0 }
+    end, { command = vim.v.progpath, timeout = 1234 }, USE_DEFAULT_MODEL)
+
+    vim.env.XDG_STATE_HOME = saved
+    vim.fn.delete(state_home, "rf")
+
+    t.assert(ok, tostring(calls))
+    t.equal(1, calls)
+    t.equal(nil, err)
+
+    local payload = vim.json.decode(argv[6])
+    t.equal({
+      providerID = "opencode-go",
+      id = "deepseek-v4.1-flash",
+      variant = "high",
+    }, payload.model)
+  end)
+
+  t.test("create_session reports an invalid configured model without spawning", function()
+    local calls, err = run_create(
+      "/tmp/project",
+      "Title",
+      function()
+        error("vim.system should not be called for an invalid model")
+      end,
+      { command = vim.v.progpath, timeout = 1234 },
+      "missing-provider-separator"
+    )
+
+    t.equal(1, calls)
+    t.matches("^opencode%-ask: ", err)
+    t.matches("model", err)
   end)
 
   t.test("create_session falls back to the request values for missing response metadata", function()

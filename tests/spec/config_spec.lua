@@ -46,6 +46,7 @@ return function(t)
     local merged = config.merge({})
 
     t.equal(nil, merged.session)
+    t.equal(nil, merged.model)
     t.equal("<leader>oq", merged.keymap)
     t.equal(true, merged.save)
     t.equal("fzf-lua", merged.picker)
@@ -78,6 +79,24 @@ return function(t)
       local ok, err = pcall(config.merge, { session = value })
       t.equal(false, ok, "session should reject " .. type(value))
       t.matches("session", tostring(err))
+    end
+  end)
+
+  t.test("model accepts nil, false, strings, and reference tables", function()
+    t.equal(nil, config.merge({}).model)
+    t.equal(false, config.merge({ model = false }).model)
+    t.equal("opencode-go/deepseek-v4.1-flash", config.merge({ model = "opencode-go/deepseek-v4.1-flash" }).model)
+
+    local reference = { providerID = "opencode-go", id = "deepseek-v4.1-flash", variant = "high" }
+    t.equal(reference, config.merge({ model = reference }).model)
+  end)
+
+  t.test("model rejects malformed values with a clear error", function()
+    for _, value in ipairs({ 42, true, "", "no-separator", {}, { id = "deepseek-v4.1-flash" } }) do
+      local ok, err = pcall(config.merge, { model = value })
+      t.equal(false, ok, "model should reject " .. vim.inspect(value))
+      t.matches("^opencode%-ask: ", tostring(err))
+      t.matches("model", tostring(err))
     end
   end)
 
