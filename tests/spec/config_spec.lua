@@ -10,6 +10,7 @@ return function(t)
       keymap = "<leader>oa",
       api = { command = "/custom/opencode" },
       ui = { width = 60 },
+      viewer = { layout = "right" },
     })
 
     t.equal("<leader>oa", merged.keymap)
@@ -20,14 +21,25 @@ return function(t)
     t.equal("rounded", merged.ui.border)
     t.equal("selection", merged.ui.position)
     t.equal(0, merged.ui.winblend)
+    t.equal("right", merged.viewer.layout)
+    t.equal("<leader>ot", merged.viewer.keymap, "viewer defaults should be preserved")
+    t.equal(0.8, merged.viewer.width)
+    t.equal(0.8, merged.viewer.height)
+    t.equal("rounded", merged.viewer.border)
+    t.equal(0, merged.viewer.winblend)
+    t.equal(false, merged.viewer.auto_open)
+    t.equal(false, merged.viewer.start_insert)
     t.equal("<leader>oq", defaults.keymap, "defaults should not be mutated")
     t.equal(default_command, defaults.api.command, "nested defaults should not be mutated")
     t.equal(80, defaults.ui.width, "ui defaults should not be mutated")
+    t.equal("float", defaults.viewer.layout, "viewer defaults should not be mutated")
 
     merged.api.command = "changed"
     merged.ui.width = 42
+    merged.viewer.layout = "bottom"
     t.equal(default_command, defaults.api.command, "merged values should not alias defaults")
     t.equal(80, defaults.ui.width, "merged ui values should not alias defaults")
+    t.equal("float", defaults.viewer.layout, "merged viewer values should not alias defaults")
   end)
 
   t.test("merge accepts the documented defaults", function()
@@ -45,6 +57,14 @@ return function(t)
     t.equal("rounded", merged.ui.border)
     t.equal("selection", merged.ui.position)
     t.equal(0, merged.ui.winblend)
+    t.equal("<leader>ot", merged.viewer.keymap)
+    t.equal("float", merged.viewer.layout)
+    t.equal(0.8, merged.viewer.width)
+    t.equal(0.8, merged.viewer.height)
+    t.equal("rounded", merged.viewer.border)
+    t.equal(0, merged.viewer.winblend)
+    t.equal(false, merged.viewer.auto_open)
+    t.equal(false, merged.viewer.start_insert)
   end)
 
   t.test("session accepts a string or nil and rejects other types", function()
@@ -166,6 +186,143 @@ return function(t)
       t.equal(false, ok, "ui.winblend should reject " .. vim.inspect(value))
       t.matches("^opencode_ask: ", tostring(err))
       t.matches("ui%.winblend", tostring(err))
+    end
+  end)
+
+  t.test("viewer rejects values that are not tables", function()
+    for _, value in ipairs({ true, 42, "float" }) do
+      local ok, err = pcall(config.merge, { viewer = value })
+      t.equal(false, ok, "viewer should reject " .. vim.inspect(value))
+      t.matches("^opencode_ask: ", tostring(err))
+      t.matches("`viewer`", tostring(err))
+      t.matches("table", tostring(err))
+    end
+  end)
+
+  t.test("viewer.keymap accepts a non-empty string or false", function()
+    local merged = config.merge({ viewer = { keymap = "<leader>ov" } })
+    t.equal("<leader>ov", merged.viewer.keymap)
+
+    merged = config.merge({ viewer = { keymap = false } })
+    t.equal(false, merged.viewer.keymap)
+
+    merged = config.merge({})
+    t.equal("<leader>ot", merged.viewer.keymap, "omitting viewer.keymap should keep the default")
+  end)
+
+  t.test("viewer.keymap rejects empty and non-string values with a clear error", function()
+    for _, value in ipairs({ "", "   ", true, 42, {} }) do
+      local ok, err = pcall(config.merge, { viewer = { keymap = value } })
+      t.equal(false, ok, "viewer.keymap should reject " .. vim.inspect(value))
+      t.matches("^opencode_ask: ", tostring(err))
+      t.matches("viewer%.keymap", tostring(err))
+      t.matches("non%-empty string", tostring(err))
+    end
+  end)
+
+  t.test("viewer.layout accepts float, right, or bottom", function()
+    for _, value in ipairs({ "float", "right", "bottom" }) do
+      local merged = config.merge({ viewer = { layout = value } })
+      t.equal(value, merged.viewer.layout)
+    end
+
+    for _, value in ipairs({ "left", "", true, 42, {} }) do
+      local ok, err = pcall(config.merge, { viewer = { layout = value } })
+      t.equal(false, ok, "viewer.layout should reject " .. vim.inspect(value))
+      t.matches("^opencode_ask: ", tostring(err))
+      t.matches("viewer%.layout", tostring(err))
+    end
+  end)
+
+  t.test("viewer.width and viewer.height accept fractions and integers", function()
+    for _, key in ipairs({ "width", "height" }) do
+      for _, value in ipairs({ 0.5, 1, 2, 80 }) do
+        local merged = config.merge({ viewer = { [key] = value } })
+        t.equal(value, merged.viewer[key])
+      end
+    end
+  end)
+
+  t.test("viewer.width and viewer.height reject invalid spans", function()
+    for _, key in ipairs({ "width", "height" }) do
+      local invalid = { 0, -1, -0.5, 1.5, 2.5, math.huge, 0 / 0, "0.8", true, {} }
+      for _, value in ipairs(invalid) do
+        local ok, err = pcall(config.merge, { viewer = { [key] = value } })
+        t.equal(false, ok, ("viewer.%s should reject %s"):format(key, vim.inspect(value)))
+        t.matches("^opencode_ask: ", tostring(err))
+        t.matches("viewer%." .. key, tostring(err))
+        t.matches("fraction", tostring(err))
+      end
+    end
+  end)
+
+  t.test("viewer.border accepts border names and valid character lists", function()
+    for _, value in ipairs({ "none", "single", "double", "rounded", "solid", "shadow" }) do
+      local merged = config.merge({ viewer = { border = value } })
+      t.equal(value, merged.viewer.border)
+    end
+
+    local lists = {
+      { "single" },
+      { "single", "double" },
+      { "single", "double", "rounded", "solid" },
+      { "a", "b", "c", "d", "e", "f", "g", "h" },
+    }
+    for _, value in ipairs(lists) do
+      local merged = config.merge({ viewer = { border = value } })
+      t.equal(value, merged.viewer.border)
+    end
+  end)
+
+  t.test("viewer.border rejects unknown names and invalid lists", function()
+    local cases = {
+      "ascii",
+      "",
+      true,
+      42,
+      {},
+      { "single", "double", "rounded" },
+      { "a", "b", "c", "d", "e" },
+      { "single", 42 },
+    }
+    for _, value in ipairs(cases) do
+      local ok, err = pcall(config.merge, { viewer = { border = value } })
+      t.equal(false, ok, "viewer.border should reject " .. vim.inspect(value))
+      t.matches("^opencode_ask: ", tostring(err))
+      t.matches("viewer%.border", tostring(err))
+    end
+  end)
+
+  t.test("viewer.winblend accepts integers from 0 to 100", function()
+    for _, value in ipairs({ 0, 50, 100 }) do
+      local merged = config.merge({ viewer = { winblend = value } })
+      t.equal(value, merged.viewer.winblend)
+    end
+  end)
+
+  t.test("viewer.winblend rejects floats and out-of-range values", function()
+    for _, value in ipairs({ 12.5, -1, 101, math.huge, "50", true, {} }) do
+      local ok, err = pcall(config.merge, { viewer = { winblend = value } })
+      t.equal(false, ok, "viewer.winblend should reject " .. vim.inspect(value))
+      t.matches("^opencode_ask: ", tostring(err))
+      t.matches("viewer%.winblend", tostring(err))
+    end
+  end)
+
+  t.test("viewer.auto_open and viewer.start_insert require booleans", function()
+    for _, key in ipairs({ "auto_open", "start_insert" }) do
+      for _, value in ipairs({ true, false }) do
+        local merged = config.merge({ viewer = { [key] = value } })
+        t.equal(value, merged.viewer[key])
+      end
+
+      for _, value in ipairs({ 1, 0, "true", {} }) do
+        local ok, err = pcall(config.merge, { viewer = { [key] = value } })
+        t.equal(false, ok, ("viewer.%s should reject %s"):format(key, vim.inspect(value)))
+        t.matches("^opencode_ask: ", tostring(err))
+        t.matches("viewer%." .. key, tostring(err))
+        t.matches("boolean", tostring(err))
+      end
     end
   end)
 end

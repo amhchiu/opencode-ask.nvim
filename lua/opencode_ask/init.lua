@@ -10,8 +10,8 @@ M.options = config.merge({})
 
 local PREFIX = "opencode-ask: "
 
---- The keymap installed by the most recent setup() call, if any.
-local installed_keymap
+--- The keymaps installed by the most recent setup() call, if any.
+local installed_keymaps = {}
 
 local function describe(err)
   if type(err) == "table" then
@@ -229,29 +229,38 @@ function M.clear_session()
   notify(("Cleared the stored OpenCode session for %s"):format(root), vim.log.levels.INFO)
 end
 
---- Remove the mapping installed by a previous setup() call.
+--- Toggle the OpenCode session viewer for the current project.
 ---
---- Only delete the mapping when it is still the callback this plugin
---- installed, so a mapping the user has since replaced is left alone.
-local function uninstall_keymap()
-  local installed = installed_keymap
-  installed_keymap = nil
-  if not installed then
-    return
-  end
+--- The viewer is wired up in a later phase; this entry point exists so the
+--- toggle command and keymap can be registered now.
+function M.toggle()
+  return nil
+end
 
-  local ok, mapping = pcall(vim.fn.maparg, installed.lhs, "x", false, true)
-  if ok and type(mapping) == "table" and mapping.callback == installed.callback then
-    pcall(vim.keymap.del, "x", installed.lhs)
+--- Remove the mappings installed by a previous setup() call.
+---
+--- Only delete a mapping when it is still the callback this plugin
+--- installed, so a mapping the user has since replaced is left alone.
+local function uninstall_keymaps()
+  local installed = installed_keymaps
+  installed_keymaps = {}
+
+  for _, entry in ipairs(installed) do
+    local ok, mapping = pcall(vim.fn.maparg, entry.lhs, entry.mode, false, true)
+    if ok and type(mapping) == "table" and mapping.callback == entry.callback then
+      pcall(vim.keymap.del, entry.mode, entry.lhs)
+    end
   end
 end
 
---- Apply configuration and install the visual-mode keymap.
+--- Apply configuration and install the ask and viewer toggle keymaps.
 function M.setup(opts)
   local merged = config.merge(opts)
 
-  uninstall_keymap()
+  uninstall_keymaps()
   M.options = merged
+
+  local keymaps = {}
 
   if M.options.keymap then
     local callback = function()
@@ -260,9 +269,21 @@ function M.setup(opts)
     vim.keymap.set("x", M.options.keymap, callback, {
       desc = "Ask OpenCode about the visual selection",
     })
-    installed_keymap = { lhs = M.options.keymap, callback = callback }
+    keymaps[#keymaps + 1] = { mode = "x", lhs = M.options.keymap, callback = callback }
   end
 
+  local viewer_opts = M.options.viewer or {}
+  if viewer_opts.keymap then
+    local callback = function()
+      M.toggle()
+    end
+    vim.keymap.set("n", viewer_opts.keymap, callback, {
+      desc = "Toggle the OpenCode session viewer",
+    })
+    keymaps[#keymaps + 1] = { mode = "n", lhs = viewer_opts.keymap, callback = callback }
+  end
+
+  installed_keymaps = keymaps
   return M.options
 end
 
