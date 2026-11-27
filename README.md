@@ -3,7 +3,8 @@
 Ask OpenCode about a visual selection without leaving Neovim. The plugin
 captures the selected file and line range, opens a floating question prompt,
 and sends the question to the OpenCode session selected or created for the
-project. Answers are still read in the OpenCode TUI.
+project. Toggle the answer viewer from inside Neovim to read the reply through
+`opencode mini --session <id>`.
 
 The chosen session is remembered per project, so follow-up questions continue
 the same conversation across Neovim restarts.
@@ -12,7 +13,8 @@ the same conversation across Neovim restarts.
 
 - Neovim 0.10 or newer. Developed and tested on Neovim 0.12.6.
 - OpenCode V2 with its background service running. The plugin shells out to
-  `opencode api`; it does not speak HTTP itself.
+  `opencode api`; it does not speak HTTP itself. The answer viewer runs the V2
+  `opencode mini` subcommand inside a Neovim terminal buffer.
 - macOS. Tested there; Linux is likely to work but is unsupported.
 - Optional: [fzf-lua](https://github.com/ibhagwan/fzf-lua) for the session
   picker. Without it, the plugin uses `vim.ui.select`.
@@ -55,6 +57,18 @@ return {
       winblend = 0,
     },
 
+    -- Toggleable opencode mini answer viewer.
+    viewer = {
+      keymap = "<leader>ot", -- Normal-mode toggle; false disables it.
+      layout = "float", -- "float", "right", or "bottom".
+      width = 0.8, -- Fraction in (0, 1] or an integer > 1 columns.
+      height = 0.8, -- Fraction in (0, 1] or an integer > 1 rows.
+      border = "rounded", -- Floating viewer only.
+      winblend = 0, -- Floating viewer only.
+      auto_open = false, -- Open after a question is sent.
+      start_insert = false, -- Enter terminal mode on open.
+    },
+
     -- Any other value falls back to vim.ui.select.
     picker = "fzf-lua",
 
@@ -86,9 +100,17 @@ default `api.timeout`.
 | `ui.border` | `string` or border list | `"rounded"` | Any `nvim_open_win` border name (`"none"`, `"single"`, `"double"`, `"rounded"`, `"solid"`, `"shadow"`) or a list of 1, 2, 4, or 8 border strings. `"none"` omits the float title and border cells. |
 | `ui.position` | `string` | `"selection"` | `"selection"` opens the prompt above the selected lines when there is room, below them when there is not, and centered when neither fits. `"center"` always centers the prompt. |
 | `ui.winblend` | `number` | `0` | Transparency of the floating prompt, from 0 (opaque) to 100 (fully transparent). |
+| `viewer.keymap` | `string` or `false` | `"<leader>ot"` | Normal-mode toggle mapping installed by `setup()`. Set to `false` to install nothing. |
+| `viewer.layout` | `string` | `"float"` | `"float"`, `"right"`, or `"bottom"`. |
+| `viewer.width` | `number` | `0.8` | Width of a floating or right-split viewer: a fraction in `(0, 1]` (`1` = 100%) or an integer above 1 in columns. |
+| `viewer.height` | `number` | `0.8` | Height of a floating or bottom-split viewer: a fraction in `(0, 1]` (`1` = 100%) or an integer above 1 in rows. |
+| `viewer.border` | `string` or border list | `"rounded"` | Border of the floating viewer, using the same values as `ui.border`. Applies only when `viewer.layout` is `"float"`. |
+| `viewer.winblend` | `number` | `0` | Transparency of the floating viewer, from 0 to 100. Applies only when `viewer.layout` is `"float"`. |
+| `viewer.auto_open` | `boolean` | `false` | Open the viewer after a question is sent successfully. |
+| `viewer.start_insert` | `boolean` | `false` | Enter terminal mode when the viewer opens, so keystrokes go to `opencode mini`. |
 
 `<leader>` resolves to Neovim's default `\` until `vim.g.mapleader` is set.
-This configuration does not set a leader, so the default mapping is `\oq`.
+This configuration does not set a leader, so the defaults are `\oq` and `\ot`.
 
 ### Theming
 
@@ -122,7 +144,9 @@ vim.api.nvim_set_hl(0, "OpencodeAskBorder", { fg = "#ff0000" })
 | Name | Mode | Description |
 | --- | --- | --- |
 | `<leader>oq` | Visual (`x`) | Ask about the selected lines. |
+| `<leader>ot` | Normal (`n`) | Toggle the answer viewer for the current project's session. |
 | `:OpencodeAsk [range]` | Command | Ask about the given range, or the current line without a range. |
+| `:OpencodeToggle` | Command | Toggle the answer viewer for the current project's session. |
 | `:OpencodeSession` | Command | Choose an existing session or create a new one for the current project. |
 | `:OpencodeSessionClear` | Command | Forget the stored session for the current project. |
 | `:checkhealth opencode_ask` | Command | Check the CLI, OpenCode service, session listing, state directory, state file, and picker. |
@@ -134,6 +158,13 @@ Prompt controls:
 | `<CR>` | Submit the question. Whitespace-only input is rejected and the prompt stays open. |
 | `<C-j>` | Insert a newline without submitting. |
 | `<Esc>` | Cancel and close the prompt. |
+
+Viewer controls:
+
+| Key | Action |
+| --- | --- |
+| `q` | Hide the viewer in Normal mode. The OpenCode session keeps running. |
+| `<C-\><C-n>` | Leave terminal mode when typing inside `opencode mini`. |
 
 ## Workflow
 
@@ -164,10 +195,34 @@ Cancelling the picker quietly does nothing.
 4. Type the question. `<C-j>` adds a newline; `<CR>` submits; `<Esc>` cancels.
 5. The plugin saves the buffer when `save` is enabled, sends the question, and
    notifies `Sent to <session> (<file>:<range>)`.
-6. Switch to the OpenCode TUI to read the answer.
+6. Press `<leader>ot` (or run `:OpencodeToggle`) to read and answer in the
+   viewer. The OpenCode TUI also works.
 
 The request includes the question, an `@relative/path#start-end` mention, and
 a file attachment URI with the line range.
+
+### Reading answers and approving permissions
+
+Press `<leader>ot` or run `:OpencodeToggle` to open `opencode mini --session
+<id>` for the project's session. The viewer appears as a floating window by
+default, or as a right or bottom split when `viewer.layout` says so, and
+attaches to the same session so the answer appears there.
+
+Use it to read the answer and to approve OpenCode permission requests without
+leaving Neovim. Setting `viewer.auto_open = true` opens the viewer as soon as a
+question is sent successfully; `viewer.start_insert = true` enters terminal mode
+straight away.
+
+Press `<leader>ot` (anywhere) or `q` inside the viewer in Normal mode to hide
+the window. The terminal buffer and the `opencode mini` process stay alive, so
+opening it again is instant and the OpenCode session stays connected. Switching projects hides the other
+project's viewer window without stopping it.
+
+To type inside `opencode mini`, enter terminal mode with `i`, then press
+`<C-\><C-n>` to return to Normal mode before pressing `q`. Re-selecting the same
+session keeps the viewer. Choosing another session, clearing it, or recovering
+from a deleted session invalidates the old buffer, so the next toggle attaches
+to the current session.
 
 ### Follow-up questions
 
@@ -224,11 +279,14 @@ corruption with the path.
 
 ## Limitations
 
-- Answers are read in the OpenCode TUI. Nothing is streamed into Neovim, and
-  Neovim only learns that the prompt was accepted.
+- Prompts are sent to the session asynchronously; Neovim only learns that the
+  request was accepted, and nothing is parsed or streamed into a native markdown
+  buffer. Press `<leader>ot` or run `:OpencodeToggle` to embed `opencode mini
+  --session <id>` in a toggleable Neovim terminal window instead. Answers stream
+  into that terminal buffer and are read there.
 - Prompts sent to an active session are delivered through OpenCode V2's
   session inbox/steering; the plugin does not queue, retry, or cancel them.
-- OpenCode permission requests are approved in the TUI.
+- OpenCode permission requests can be approved in the viewer.
 - The plugin can create a session from the session picker. It cannot rename or
   delete sessions, and it cannot create one when the OpenCode CLI or service is
   unavailable.
@@ -286,6 +344,26 @@ retry. If saving fails after the prompt, the question is not sent.
 
 Increase `api.timeout` and confirm the OpenCode service is responsive. A timed
 out request is reported as a warning; the plugin does not retry it.
+
+**Viewer will not open**
+
+The viewer warns when `api.command` is missing or not executable. Install
+OpenCode, add it to `PATH`, or set `api.command` to its absolute path. Toggling
+also needs a resolved session; run `:OpencodeSession` if the picker was
+cancelled or no session is stored.
+
+**Viewer text is stale**
+
+The viewer attaches to the project's stored session. Choosing another session
+with `:OpencodeSession`, clearing it with `:OpencodeSessionClear`, or recovering
+from a deleted session invalidates the cached buffer, so the next toggle
+re-attaches to the current session and shows fresh output.
+
+**`opencode mini` fails to start**
+
+`opencode mini` needs OpenCode V2 and a real TTY. The viewer runs it in a Neovim
+terminal buffer, which provides the TTY; confirm that `opencode --version`
+reports `2.x`. Startup errors stay visible in the open viewer window.
 
 ## Development
 
