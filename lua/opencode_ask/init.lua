@@ -3,6 +3,7 @@ local selection = require("opencode_ask.selection")
 local sessions = require("opencode_ask.sessions")
 local client = require("opencode_ask.client")
 local ui = require("opencode_ask.ui")
+local viewer = require("opencode_ask.viewer")
 
 local M = {}
 
@@ -85,6 +86,9 @@ end
 
 local function handle_session_not_found(err, context)
   local detail = describe(err)
+
+  -- The cached viewer buffer points at the session that no longer exists.
+  viewer.invalidate(context.project_root)
 
   if type(M.options.session) == "string" then
     notify(
@@ -190,6 +194,9 @@ function M.ask(opts)
           ("Sent to %s (%s)"):format(session_label(session), context.ref),
           vim.log.levels.INFO
         )
+        if M.options.viewer and M.options.viewer.auto_open then
+          viewer.open_for_session(context.project_root, session)
+        end
       end)
     end)
   end)
@@ -212,6 +219,7 @@ function M.select_session()
       return
     end
 
+    viewer.invalidate(root, session.id)
     notify(("Selected OpenCode session: %s"):format(session_label(session)), vim.log.levels.INFO)
   end)
 end
@@ -226,15 +234,35 @@ function M.clear_session()
     return
   end
 
+  viewer.invalidate(root)
   notify(("Cleared the stored OpenCode session for %s"):format(root), vim.log.levels.INFO)
 end
 
 --- Toggle the OpenCode session viewer for the current project.
----
---- The viewer is wired up in a later phase; this entry point exists so the
---- toggle command and keymap can be registered now.
 function M.toggle()
-  return nil
+  -- Toggling from inside an open viewer always hides it, even when the working
+  -- directory differs from the source file's project root.
+  if viewer.hide_current() then
+    return
+  end
+
+  local root = selection.project_root(0)
+  if viewer.is_open(root) then
+    viewer.hide(root)
+    return
+  end
+
+  sessions.resolve(root, function(err, session)
+    if err then
+      notify(err, vim.log.levels.WARN)
+      return
+    end
+    if type(session) ~= "table" then
+      return
+    end
+
+    viewer.open_for_session(root, session)
+  end)
 end
 
 --- Remove the mappings installed by a previous setup() call.
