@@ -22,6 +22,7 @@ return function(t)
     t.equal("selection", merged.ui.position)
     t.equal(0, merged.ui.winblend)
     t.equal("right", merged.viewer.layout)
+    t.equal("center", merged.viewer.position)
     t.equal("<leader>ot", merged.viewer.keymap, "viewer defaults should be preserved")
     t.equal(0.8, merged.viewer.width)
     t.equal(0.8, merged.viewer.height)
@@ -60,6 +61,7 @@ return function(t)
     t.equal(0, merged.ui.winblend)
     t.equal("<leader>ot", merged.viewer.keymap)
     t.equal("float", merged.viewer.layout)
+    t.equal("center", merged.viewer.position)
     t.equal(0.8, merged.viewer.width)
     t.equal(0.8, merged.viewer.height)
     t.equal("rounded", merged.viewer.border)
@@ -250,6 +252,32 @@ return function(t)
       t.equal(false, ok, "viewer.layout should reject " .. vim.inspect(value))
       t.matches("^opencode_ask: ", tostring(err))
       t.matches("viewer%.layout", tostring(err))
+    end
+  end)
+
+  t.test("viewer.position accepts the documented anchors", function()
+    local anchors = {
+      "center",
+      "top",
+      "bottom",
+      "left",
+      "right",
+      "top-left",
+      "top-right",
+      "bottom-left",
+      "bottom-right",
+    }
+
+    for _, value in ipairs(anchors) do
+      local merged = config.merge({ viewer = { position = value } })
+      t.equal(value, merged.viewer.position)
+    end
+
+    for _, value in ipairs({ "middle", "", true, 42, {} }) do
+      local ok, err = pcall(config.merge, { viewer = { position = value } })
+      t.equal(false, ok, "viewer.position should reject " .. vim.inspect(value))
+      t.matches("^opencode_ask: ", tostring(err))
+      t.matches("viewer%.position", tostring(err))
     end
   end)
 
