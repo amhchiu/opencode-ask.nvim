@@ -9,6 +9,8 @@ project. Toggle the answer viewer from inside Neovim to read the reply through
 The chosen session is remembered per project, so follow-up questions continue
 the same conversation across Neovim restarts.
 
+https://github.com/user-attachments/assets/c5d88fc5-6f54-4893-8002-8724bab2f999
+
 ## Requirements
 
 - Neovim 0.10 or newer. Developed and tested on Neovim 0.12.6.
